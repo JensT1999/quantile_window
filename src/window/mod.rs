@@ -41,7 +41,7 @@ pub fn rolling_quantile_window(input_array: &[f64], window_size: usize, quantile
     // update loop
     let input_slice = &input_array[window_size..];
     for (index, input) in input_slice.iter().enumerate() {
-        if index == 28 {
+        if index == 155 {
             println!("test");
         }
 

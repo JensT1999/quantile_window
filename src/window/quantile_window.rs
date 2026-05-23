@@ -60,8 +60,14 @@ struct QuantileWindowSelectionCandidate {
     block_value: f64,
 }
 
+struct QuantileWindowSelectionResult {
+    selection_candidate: QuantileWindowSelectionCandidate,
+    duplicates_to_skip: usize,
+}
+
 struct QuantileWindowUpdateResult {
     new_tracker: usize,
+    ran_out_right: bool,
     update_pred_heap: bool,
     update_succ_heap: bool,
 }
@@ -71,23 +77,24 @@ impl QuantileWindow {
     pub fn new(window_size: usize, quantile: f64) -> QuantileWindow {
         let needed_blocks = calculate_needed_big_blocks(window_size);
         let needed_queue_size = window_size;
-        let mut result_window = QuantileWindow { size: window_size,
-                        current_size: 0,
-                        quantile,
-                        searched_rank: 0.0,
-                        global_floor_rank: 0,
-                        actual_floor_rank: 0,
-                        actual_floor_value: 0.0,
-                        actual_floor_big_block: 0,
-                        interpolation: false,
-                        actual_block: 0,
-                        block_data: Vec::with_capacity(needed_blocks),
-                        queue_data: vec![0.0; needed_queue_size],
-                        pred_heap: vec![QuantileWindowHeapNode { block_index: 0, value: 0.0 }; needed_blocks],
-                        pred_heap_block_indizes: vec![0; needed_blocks],
-                        succ_heap: vec![QuantileWindowHeapNode { block_index: 0, value: 0.0 }; needed_blocks],
-                        succ_heap_block_indizes: vec![0; needed_blocks],
-                    };
+        let mut result_window = QuantileWindow {
+            size: window_size,
+            current_size: 0,
+            quantile,
+            searched_rank: 0.0,
+            global_floor_rank: 0,
+            actual_floor_rank: 0,
+            actual_floor_value: 0.0,
+            actual_floor_big_block: 0,
+            interpolation: false,
+            actual_block: 0,
+            block_data: Vec::with_capacity(needed_blocks),
+            queue_data: vec![0.0; needed_queue_size],
+            pred_heap: vec![QuantileWindowHeapNode { block_index: 0, value: 0.0 }; needed_blocks],
+            pred_heap_block_indizes: vec![0; needed_blocks],
+            succ_heap: vec![QuantileWindowHeapNode { block_index: 0, value: 0.0 }; needed_blocks],
+            succ_heap_block_indizes: vec![0; needed_blocks],
+        };
 
         let mut current_block = 0;
         while current_block < needed_blocks {
@@ -126,19 +133,68 @@ impl QuantileWindow {
         let searched_rank = self.quantile * ((self.current_size - 1) as f64);
         let floor_rank = searched_rank.floor() as usize;
 
-        let global_floor_block =
+        let selection_result =
             find_global_floor_value_by_rank(&self.block_data ,floor_rank);
-        initialize_block_tracker(&mut self.block_data, &global_floor_block);
 
-        pred_heap_initial_build(&mut self.block_data, &mut self.pred_heap, &mut self.pred_heap_block_indizes);
-        succ_heap_initial_build(&mut self.block_data, &mut self.succ_heap,
-            &mut self.succ_heap_block_indizes, global_floor_block.block_index);
+        let global_floor_candidate = selection_result.selection_candidate;
+        let mut global_floor_big_block_index = global_floor_candidate.block_index;
+        initialize_block_tracker(&mut self.block_data, &global_floor_candidate);
+
+        pred_heap_initial_build(&mut self.block_data,
+            &mut self.pred_heap,
+            &mut self.pred_heap_block_indizes);
+        succ_heap_initial_build(&mut self.block_data,
+            &mut self.succ_heap,
+            &mut self.succ_heap_block_indizes,
+            global_floor_big_block_index);
+
+        let mut duplicates_to_skip = selection_result.duplicates_to_skip;
+        while duplicates_to_skip > 0 {
+            let new_floor_data = unsafe {
+                *self.succ_heap.get_unchecked(0)
+            };
+            let new_floor_big_block_index = new_floor_data.block_index;
+
+            let old_floor_big_block_index = global_floor_big_block_index;
+            let old_floor_big_block = unsafe {
+                self.block_data.get_unchecked_mut(old_floor_big_block_index)
+            };
+
+            old_floor_big_block.tracker += 1;
+            if old_floor_big_block.tracker == old_floor_big_block.length {
+                old_floor_big_block.ran_out_right = true;
+            }
+
+            pred_heap_update(old_floor_big_block,
+                old_floor_big_block_index,
+                &mut self.pred_heap,
+                &mut self.pred_heap_block_indizes);
+
+            succ_heap_update(old_floor_big_block,
+                old_floor_big_block_index,
+                &mut self.succ_heap,
+                &mut self.succ_heap_block_indizes,
+                new_floor_big_block_index);
+
+            let new_floor_big_block = unsafe {
+                self.block_data.get_unchecked(new_floor_big_block_index)
+            };
+
+            succ_heap_update(new_floor_big_block,
+                new_floor_big_block_index,
+                &mut self.succ_heap,
+                &mut self.succ_heap_block_indizes,
+                new_floor_big_block_index);
+
+            global_floor_big_block_index = new_floor_big_block_index;
+            duplicates_to_skip -= 1;
+        }
 
         self.searched_rank = searched_rank;
         self.global_floor_rank = floor_rank;
         self.actual_floor_rank = floor_rank;
-        self.actual_floor_value = global_floor_block.block_value;
-        self.actual_floor_big_block = global_floor_block.block_index;
+        self.actual_floor_value = global_floor_candidate.block_value;
+        self.actual_floor_big_block = global_floor_big_block_index;
         self.interpolation = !((searched_rank % 1.0) == 0.0);
         self.actual_block = 0;
     }
@@ -160,7 +216,9 @@ impl QuantileWindow {
         let actual_block = unsafe {
             self.block_data.get_unchecked_mut(actual_block_index)
         };
+
         actual_block.tracker = update_result.new_tracker;
+        actual_block.ran_out_right = update_result.ran_out_right;
 
         if update_result.update_pred_heap {
             pred_heap_update(actual_block,
@@ -214,15 +272,53 @@ impl QuantileWindow {
 
         let mut update_pred_heap = false;
         let mut update_succ_heap = false;
+        let actual_block_len = actual_block.length;
         let old_tracker = actual_block.tracker;
         let mut new_tracker = old_tracker;
+        let mut ran_out_right = actual_block.ran_out_right;
+        let mut update_tracker = true;
+
+        if actual_block.ran_out_right {
+            if new_value >= self.actual_floor_value {
+                new_tracker = actual_block_len - 1;
+                ran_out_right = false;
+
+                self.actual_floor_rank -= 1;
+
+                update_pred_heap = true;
+                update_succ_heap = true;
+                update_tracker = false;
+            } else {
+                if deleted_index == (actual_block.length - 1) ||
+                    new_index == (actual_block.length - 1) {
+                    update_pred_heap = true;
+                    update_tracker = false;
+                } else {
+                    return QuantileWindowUpdateResult {
+                        new_tracker,
+                        ran_out_right,
+                        update_pred_heap,
+                        update_succ_heap
+                    };
+                }
+            }
+        }
+
+        if let false = update_tracker {
+            return QuantileWindowUpdateResult {
+                new_tracker,
+                ran_out_right,
+                update_pred_heap,
+                update_succ_heap
+            };
+        }
 
         if deleted_index < old_tracker {
             new_tracker -= 1;
             self.actual_floor_rank -= 1;
         }
 
-        if deleted_index == old_tracker - 1 {
+        if old_tracker > 0 && deleted_index == old_tracker - 1 {
             update_pred_heap = true;
         }
 
@@ -245,7 +341,18 @@ impl QuantileWindow {
             }
         }
 
-        QuantileWindowUpdateResult { new_tracker, update_pred_heap, update_succ_heap }
+        if new_tracker == actual_block_len {
+            ran_out_right = true;
+        } else if new_tracker < actual_block_len {
+            ran_out_right = false;
+        }
+
+        return QuantileWindowUpdateResult {
+            new_tracker,
+            ran_out_right,
+            update_pred_heap,
+            update_succ_heap
+        };
     }
 
     fn update_floor_block(&mut self, new_value: f64, insertion_indizes: (usize, usize)) ->
@@ -259,15 +366,53 @@ impl QuantileWindow {
 
         let mut update_pred_heap = false;
         let mut update_succ_heap = false;
+        let actual_block_len = actual_block.length;
         let old_tracker = actual_block.tracker;
         let mut new_tracker = old_tracker;
+        let mut ran_out_right = actual_block.ran_out_right;
+        let mut update_tracker = true;
+
+        if actual_block.ran_out_right {
+            if new_value >= self.actual_floor_value {
+                new_tracker = new_index;
+                ran_out_right = false;
+
+                self.actual_floor_rank -= 1;
+
+                update_pred_heap = true;
+                update_succ_heap = true;
+                update_tracker = false;
+            } else {
+                if deleted_index == (actual_block.length - 1) ||
+                    new_index == (actual_block.length - 1) {
+                    update_pred_heap = true;
+                    update_tracker = false;
+                } else {
+                    return QuantileWindowUpdateResult {
+                        new_tracker,
+                        ran_out_right,
+                        update_pred_heap,
+                        update_succ_heap
+                    };
+                }
+            }
+        }
+
+        if let false = update_tracker {
+            return QuantileWindowUpdateResult {
+                new_tracker,
+                ran_out_right,
+                update_pred_heap,
+                update_succ_heap
+            };
+        }
 
         if deleted_index < old_tracker {
             new_tracker -= 1;
             self.actual_floor_rank -= 1;
         }
 
-        if deleted_index == old_tracker - 1 {
+        if old_tracker > 0 && deleted_index == old_tracker - 1 {
             update_pred_heap = true;
         }
 
@@ -298,7 +443,18 @@ impl QuantileWindow {
             update_succ_heap = true;
         }
 
-        QuantileWindowUpdateResult { new_tracker, update_pred_heap, update_succ_heap }
+        if new_tracker == actual_block_len {
+            ran_out_right = true;
+        } else if new_tracker < actual_block_len {
+            ran_out_right = false;
+        }
+
+        QuantileWindowUpdateResult {
+            new_tracker,
+            ran_out_right,
+            update_pred_heap,
+            update_succ_heap
+        }
     }
 
     fn update_global_to_successor(&mut self) {
@@ -410,7 +566,12 @@ impl QuantileWindow {
                 self.block_data.get_unchecked_mut(new_floor_data.block_index)
             };
 
-            new_floor_big_block.tracker -= 1;
+            if new_floor_big_block.ran_out_right {
+                new_floor_big_block.tracker = new_floor_big_block.length - 1;
+                new_floor_big_block.ran_out_right = false;
+            } else {
+                new_floor_big_block.tracker -= 1;
+            }
 
             pred_heap_update(new_floor_big_block,
                 new_floor_data.block_index,
@@ -439,7 +600,7 @@ fn calculate_interpolated_quantile(searched_rank: f64, floor_value: f64, success
 
 // Initial phase
 fn initial_sort(big_blocks: &mut [QuantileWindowBigBlock]) {
-    let slices_per_block = (BIG_BLOCK_SIZE / SORTING_NETWORK_SIZE);
+    let slices_per_block = BIG_BLOCK_SIZE / SORTING_NETWORK_SIZE;
     for big_block in big_blocks {
         let mut current_slice = 0;
         while current_slice < slices_per_block {
@@ -500,7 +661,7 @@ fn k_way_merge_tiny_block(data: &mut [f64; BIG_BLOCK_SIZE], big_block_size: usiz
 }
 
 fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], searched_rank: usize) ->
-    QuantileWindowSelectionCandidate {
+    QuantileWindowSelectionResult {
     let big_blocks_len = block_data.len();
 
     let mut selection_helpers: Vec<QuantileWindowSelectionHelper> = Vec::with_capacity(big_blocks_len);
@@ -544,13 +705,13 @@ fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], search
             active_blocks += 1;
         }
 
-        // Mal schauen
         let candidates_slice = &mut pivot_candidates[0..active_blocks];
         let pivot_element =
             candidates_slice.select_nth_unstable_by(active_blocks / 2,
             |a, b| a.block_value.partial_cmp(&b.block_value).unwrap()).1;
 
         let mut global_lower_bound = 0;
+        let mut global_upper_bound = 0;
         for selection_helper in &selection_helpers {
             if selection_helper.invalid {
                 continue;
@@ -558,16 +719,25 @@ fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], search
 
             let target_slice =
                 &selection_helper.data_slice[selection_helper.tracker_low..selection_helper.tracker_high];
-            let pivot_lower_bound = target_slice.partition_point(|&x| x < pivot_element.block_value);
+            let pivot_lower_bound = target_slice
+                .partition_point(|&x| x < pivot_element.block_value);
             global_lower_bound += pivot_lower_bound;
+            let pivot_upper_bound = target_slice
+                .partition_point(|&x| x <= pivot_element.block_value);
+            global_upper_bound += pivot_upper_bound;
         }
 
         for selection_helper in &selection_helpers {
             global_lower_bound += selection_helper.tracker_low;
+            global_upper_bound += selection_helper.tracker_low;
         }
 
-        if global_lower_bound == searched_rank {
-            return *pivot_element;
+        if searched_rank >= global_lower_bound && searched_rank < global_upper_bound {
+            let duplicates_to_skip = searched_rank - global_lower_bound;
+            return QuantileWindowSelectionResult {
+                selection_candidate: *pivot_element,
+                duplicates_to_skip
+            };
         } else if global_lower_bound < searched_rank {
             for selection_helper in &mut selection_helpers {
                 if selection_helper.invalid {
@@ -607,15 +777,24 @@ fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], search
 fn initialize_block_tracker(block_data: &mut [QuantileWindowBigBlock],
     floor_value_canidate: &QuantileWindowSelectionCandidate) {
     for (index, block) in block_data.iter_mut().enumerate() {
+        // Muss eigentlich weg, da wegen Duplikaten der tracker immer beim ersten auftretenden Element gesetzt
+        // werden muss. Interessanterweise hat aber genau dieser if-block auswirkungen auf die IPC beim 0,5 quantil??
+        // So bleibt es performancetechnisch wie vorher. Der Compiler scheint hier laut KI zu komplexen Code zu
+        // generieren ohne den IF.
         if index == floor_value_canidate.block_index {
-            block.tracker = floor_value_canidate.block_tracker;
+            let mut block_tracker = floor_value_canidate.block_tracker;
+            let tracker_value = block.data[block_tracker];
+            // Duplicate skipping intern
+            while block_tracker > 0 && tracker_value == block.data[block_tracker - 1] {
+                block_tracker -= 1;
+            }
+
+            block.tracker = block_tracker;
             continue;
         }
 
-        let block_slice = &block.data;
         let lower_bound_of_floor_value =
-            block_slice.partition_point(|&x| x < floor_value_canidate.block_value);
-
+            block.data.partition_point(|&x| x < floor_value_canidate.block_value);
         if lower_bound_of_floor_value == block.length {
             block.ran_out_right = true;
         }
@@ -841,6 +1020,7 @@ fn succ_heap_update(target_block: &QuantileWindowBigBlock, target_block_index: u
     }
 }
 
+#[inline(never)]
 fn succ_heap_heapify_up(succ_heap: &mut [QuantileWindowHeapNode], succ_heap_block_indizes: &mut [usize],
     mut position: usize) {
     let temp_node_data = unsafe {
@@ -873,6 +1053,7 @@ fn succ_heap_heapify_up(succ_heap: &mut [QuantileWindowHeapNode], succ_heap_bloc
     }
 }
 
+#[inline(never)]
 fn succ_heap_heapify_down(succ_heap: &mut [QuantileWindowHeapNode], succ_heap_block_indizes: &mut [usize],
     mut position: usize) {
     loop {
@@ -901,7 +1082,7 @@ fn succ_heap_heapify_down(succ_heap: &mut [QuantileWindowHeapNode], succ_heap_bl
     }
 }
 
-#[inline(always)]
+#[inline(never)]
 fn succ_heap_min_child(succ_heap: &[QuantileWindowHeapNode], position: usize) -> usize {
     let heap_len = succ_heap.len();
     let first_child = heap_child_index_calc(position, K_ARY_HEAP, 1);
@@ -988,12 +1169,10 @@ fn shift_in_forwards(data: &mut [f64], old_value_index: usize, new_value: f64) -
 
 fn test_sorted_blocks(block_data: &[QuantileWindowBigBlock]) -> bool {
     for block in block_data {
-        let block_slice = &block.data;
-
         let mut current_value = -f64::INFINITY;
-        for value in block_slice {
-            if *value >= current_value {
-                current_value = *value;
+        for value in block.data {
+            if value >= current_value {
+                current_value = value;
             } else {
                 return false;
             }
@@ -1079,10 +1258,14 @@ fn sorting_network_16(data: &mut [f64]) {
 
 #[inline(always)]
 fn sorting_network_cas(data: &mut [f64], index1: usize, index2: usize) {
-    let data1 = data[index1];
-    let data2 = data[index2];
-    if data1 > data2 {
-        data[index1] = data2;
-        data[index2] = data1;
+    let data_tup = unsafe {
+        (*data.get_unchecked(index1), *data.get_unchecked(index2))
+    };
+
+    if data_tup.0 > data_tup.1 {
+        unsafe {
+            *data.get_unchecked_mut(index1) = data_tup.1;
+            *data.get_unchecked_mut(index2) = data_tup.0;
+        }
     }
 }
