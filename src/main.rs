@@ -6,7 +6,7 @@ use std::f64::consts::PI;
 
 // 50000 length und 193 windowSize
 const TEST_VEC_LEN: usize = 100000000;
-const WINDOW_SIZE: usize = 1000000;
+const WINDOW_SIZE: usize = 10000000;
 const QUANTILE: f64 = 0.5;
 
 fn main() {

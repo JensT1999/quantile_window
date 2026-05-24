@@ -77,6 +77,11 @@ impl QuantileWindow {
     pub fn new(window_size: usize, quantile: f64) -> QuantileWindow {
         let needed_blocks = calculate_needed_big_blocks(window_size);
         let needed_queue_size = window_size;
+
+        // Exp
+        let needed_heap_blocks = (needed_blocks + K_ARY_HEAP - 1) / K_ARY_HEAP;
+        let needed_heaps_size = K_ARY_HEAP * needed_heap_blocks + 1;
+
         let mut result_window = QuantileWindow {
             size: window_size,
             current_size: 0,
@@ -90,10 +95,10 @@ impl QuantileWindow {
             actual_block: 0,
             block_data: Vec::with_capacity(needed_blocks),
             queue_data: vec![0.0; needed_queue_size],
-            pred_heap: vec![QuantileWindowHeapNode { block_index: 0, value: 0.0 }; needed_blocks],
-            pred_heap_block_indizes: vec![0; needed_blocks],
-            succ_heap: vec![QuantileWindowHeapNode { block_index: 0, value: 0.0 }; needed_blocks],
-            succ_heap_block_indizes: vec![0; needed_blocks],
+            pred_heap: vec![QuantileWindowHeapNode { block_index: 0, value: PRED_DUMMY_VALUE }; needed_heaps_size],
+            pred_heap_block_indizes: vec![0; needed_heaps_size],
+            succ_heap: vec![QuantileWindowHeapNode { block_index: 0, value: SUCC_DUMMY_VALUE }; needed_heaps_size],
+            succ_heap_block_indizes: vec![0; needed_heaps_size],
         };
 
         let mut current_block = 0;
@@ -930,24 +935,35 @@ fn pred_heap_max_child(pred_heap: &[QuantileWindowHeapNode], position: usize) ->
     let heap_len = pred_heap.len();
     let first_child = heap_child_index_calc(position, K_ARY_HEAP, 1);
     if first_child >= heap_len { return  position; }
-    let last_child = heap_child_index_calc(position, K_ARY_HEAP, K_ARY_HEAP)
-        .min(heap_len - 1);
+    // let last_child = heap_child_index_calc(position, K_ARY_HEAP, K_ARY_HEAP)
+    //     .min(heap_len - 1);
 
     let mut best = position;
     let mut best_node_value = unsafe {
         pred_heap.get_unchecked(best).value
     };
 
-    for child in first_child..=last_child {
+    for child in 0..K_ARY_HEAP {
         let target_child = unsafe {
-            pred_heap.get_unchecked(child)
+            pred_heap.get_unchecked(first_child + child)
         };
 
         if target_child.value > best_node_value {
-            best = child;
+            best = first_child + child;
             best_node_value = target_child.value;
         }
     }
+
+    // for child in first_child..=last_child {
+    //     let target_child = unsafe {
+    //         pred_heap.get_unchecked(child)
+    //     };
+
+    //     if target_child.value > best_node_value {
+    //         best = child;
+    //         best_node_value = target_child.value;
+    //     }
+    // }
 
     best
 }
@@ -1020,7 +1036,6 @@ fn succ_heap_update(target_block: &QuantileWindowBigBlock, target_block_index: u
     }
 }
 
-#[inline(never)]
 fn succ_heap_heapify_up(succ_heap: &mut [QuantileWindowHeapNode], succ_heap_block_indizes: &mut [usize],
     mut position: usize) {
     let temp_node_data = unsafe {
@@ -1053,7 +1068,6 @@ fn succ_heap_heapify_up(succ_heap: &mut [QuantileWindowHeapNode], succ_heap_bloc
     }
 }
 
-#[inline(never)]
 fn succ_heap_heapify_down(succ_heap: &mut [QuantileWindowHeapNode], succ_heap_block_indizes: &mut [usize],
     mut position: usize) {
     loop {
@@ -1082,29 +1096,40 @@ fn succ_heap_heapify_down(succ_heap: &mut [QuantileWindowHeapNode], succ_heap_bl
     }
 }
 
-#[inline(never)]
+#[inline(always)]
 fn succ_heap_min_child(succ_heap: &[QuantileWindowHeapNode], position: usize) -> usize {
     let heap_len = succ_heap.len();
     let first_child = heap_child_index_calc(position, K_ARY_HEAP, 1);
     if first_child >= heap_len { return  position; }
-    let last_child = heap_child_index_calc(position, K_ARY_HEAP, K_ARY_HEAP)
-        .min(heap_len - 1);
+    // let last_child = heap_child_index_calc(position, K_ARY_HEAP, K_ARY_HEAP)
+    //     .min(heap_len - 1);
 
     let mut best = position;
     let mut best_node_value = unsafe {
         succ_heap.get_unchecked(best).value
     };
 
-    for child in first_child..=last_child {
+    for child in 0..K_ARY_HEAP {
         let target_child = unsafe {
-            succ_heap.get_unchecked(child)
+            succ_heap.get_unchecked(first_child + child)
         };
 
         if target_child.value < best_node_value {
-            best = child;
+            best = first_child + child;
             best_node_value = target_child.value;
         }
     }
+
+    // for child in first_child..=last_child {
+    //     let target_child = unsafe {
+    //         succ_heap.get_unchecked(child)
+    //     };
+
+    //     if target_child.value < best_node_value {
+    //         best = child;
+    //         best_node_value = target_child.value;
+    //     }
+    // }
 
     best
 }
