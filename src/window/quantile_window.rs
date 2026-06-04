@@ -7,7 +7,7 @@ const K_ARY: usize = 8;
 const PRED_DUMMY_VALUE: f64 = -f64::INFINITY;
 const SUCC_DUMMY_VALUE: f64 = f64::INFINITY;
 
-pub struct QuantileWindow {
+struct QuantileWindow {
     size: usize,
     current_size: usize,
 
@@ -28,7 +28,7 @@ pub struct QuantileWindow {
     succ_tree: Vec<QuantileWindowTreeNode>,
 }
 
-pub struct QuantileWindowBigBlock {
+struct QuantileWindowBigBlock {
     data: [f64; BIG_BLOCK_SIZE],
     length: usize,
     update_index: usize,
@@ -73,7 +73,7 @@ struct QuantileWindowUpdateResult {
 
 impl QuantileWindow {
 
-    pub fn new(window_size: usize, quantile: f64) -> QuantileWindow {
+    fn new(window_size: usize, quantile: f64) -> QuantileWindow {
         let needed_blocks = calculate_needed_big_blocks(window_size);
         let needed_queue_size = window_size;
         let needed_trees_metadata = tree_calculate_metadata(needed_blocks);
@@ -117,7 +117,7 @@ impl QuantileWindow {
         result_window
     }
 
-    pub fn add(&mut self, value: f64) {
+    fn add(&mut self, value: f64) {
         let current_block =
         if self.block_data[self.actual_block].length == BIG_BLOCK_SIZE {
             self.actual_block += 1;
@@ -132,7 +132,7 @@ impl QuantileWindow {
         self.current_size += 1;
     }
 
-    pub fn prepare(&mut self) {
+    fn prepare(&mut self) {
         initial_sort(&mut self.block_data);
         merge_to_big_blocks(&mut self.block_data);
 
@@ -201,15 +201,17 @@ impl QuantileWindow {
         self.actual_floor_rank = floor_rank;
         self.actual_floor_value = global_floor_candidate.block_value;
         self.actual_floor_big_block = global_floor_big_block_index;
+
         self.interpolation = !((searched_rank % 1.0) == 0.0);
+
         self.actual_block = 0;
     }
 
-    pub fn test_on_sorted(&self) -> bool {
+    fn test_on_sorted(&self) -> bool {
         test_sorted_blocks(&self.block_data)
     }
 
-    pub fn update_window(&mut self, new_value: f64) {
+    fn update_window(&mut self, new_value: f64) {
         let actual_block_index = self.actual_block;
         let insertion_indizes = self.update_block_elements(new_value);
 
@@ -482,7 +484,7 @@ impl QuantileWindow {
         self.actual_floor_value = new_floor_data.value;
     }
 
-    pub fn result_quantile(&mut self, result_vec: &mut Vec<f64>) {
+    fn result_quantile(&mut self, result_vec: &mut Vec<f64>) {
         if !self.interpolation {
             result_vec.push(self.actual_floor_value);
         } else {
@@ -498,7 +500,7 @@ impl QuantileWindow {
         }
     }
 
-    pub fn adjust_and_result_quantile(&mut self, result_vec: &mut Vec<f64>) {
+    fn adjust_and_result_quantile(&mut self, result_vec: &mut Vec<f64>) {
         self.global_right_shift();
         self.global_left_shift();
         self.result_quantile(result_vec);
@@ -625,10 +627,9 @@ fn merge_to_big_blocks(big_blocks: &mut [QuantileWindowBigBlock]) {
     }
 }
 
-// Maybe auf Vec ändern, wegen Stack overflow
 fn k_way_merge_tiny_block(data: &mut [f64; BIG_BLOCK_SIZE], big_block_size: usize) {
-    let mut temp_data_vec = [0.0; BIG_BLOCK_SIZE];
-    data.clone_into(&mut temp_data_vec);
+    let mut temp_data_vec = vec![0.0; BIG_BLOCK_SIZE];
+    temp_data_vec.copy_from_slice(data);
 
     let tiny_blocks = big_block_size / SORTING_NETWORK_SIZE;
     let mut tiny_blocks_ptr: Vec<usize> = Vec::with_capacity(tiny_blocks);
@@ -1084,7 +1085,6 @@ fn succ_tree_update(target_block: &QuantileWindowBigBlock, target_block_index: u
             } else {
                 break;
             }
-
         }
 
         current_index = parent_index;
@@ -1253,4 +1253,27 @@ fn sorting_network_cas(data: &mut [f64], index1: usize, index2: usize) {
             *data.get_unchecked_mut(index2) = data_tup.0;
         }
     }
+}
+
+// Main function
+pub fn rolling_window(input_array: &[f64], window_size: usize, quantile: f64) -> Vec<f64> {
+    let result_vec_len = (input_array.len() - window_size) + 1;
+    let mut result_vec = Vec::with_capacity(result_vec_len);
+    let mut window = QuantileWindow::new(window_size, quantile);
+
+    let input_slice = &input_array[0..window_size];
+    for value in input_slice {
+        window.add(*value);
+    }
+
+    window.prepare();
+    window.result_quantile(&mut result_vec);
+
+    let input_slice = &input_array[window_size..];
+    for input in input_slice {
+        window.update_window(*input);
+        window.adjust_and_result_quantile(&mut result_vec);
+    }
+
+    result_vec
 }
