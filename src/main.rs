@@ -5,9 +5,9 @@ use std::{clone, time::Instant};
 use std::f64::consts::PI;
 
 // 50000 length und 193 windowSize
-const TEST_VEC_LEN: usize = 100000000;
-const WINDOW_SIZE: usize = 10000000;
-const QUANTILE: f64 = 0.99;
+const TEST_VEC_LEN: usize = 1000000000;
+const WINDOW_SIZE: usize = 100000000;
+const QUANTILE: f64 = 0.5;
 
 fn main() {
     test_window();
@@ -16,13 +16,13 @@ fn main() {
 fn test_window() {
     // let mut rng = StdRng::seed_from_u64(42);
     let mut rng = rand::rng();
-    // let mut test_vec: Vec<f64> = Vec::with_capacity(TEST_VEC_LEN);
-    let test_vec = generiere_netzwerk_daten(TEST_VEC_LEN);
+    let mut test_vec: Vec<f64> = Vec::with_capacity(TEST_VEC_LEN);
+    // let test_vec = generiere_iot_daten(TEST_VEC_LEN);
 
-    // for index in 0..TEST_VEC_LEN{
-    //     let rand = rng.random_range(-1000.0..1000.0);
-    //     test_vec.push(rand);
-    // }
+    for index in 0..TEST_VEC_LEN{
+        let rand = rng.random_range(-1000.0..1000.0);
+        test_vec.push(rand);
+    }
 
     // Erzeugt ein heftiges Auf und Ab innerhalb des Fensters
     // for i in 0..TEST_VEC_LEN {
@@ -54,7 +54,7 @@ fn test_window() {
     //     test_vec.push(trend + asymmetric_noise);
     // }
 
-    // test_vec.sort_by(|a, b| a.partial_cmp(&b).unwrap());
+    test_vec.sort_by(|a, b| a.partial_cmp(&b).unwrap());
 
     let inst = Instant::now();
     // let mut cloned_vec = test_vec.clone();
@@ -81,7 +81,7 @@ fn gen_test_quantiles(input_vec: &mut [f64], window_size: usize, quantile: f64) 
     let mut result_vec = Vec::with_capacity(num_windows);
     let searched_rank = quantile * (window_size - 1) as f64;
     for windows in 0..num_windows {
-        if windows == 155 {
+        if windows == 784 {
             println!("hi");
         }
 

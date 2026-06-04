@@ -2,7 +2,7 @@ use std::{vec};
 
 const SORTING_NETWORK_SIZE: usize = 16;
 const BIG_BLOCK_SIZE: usize = 64;
-const K_ARY_HEAP: usize = 8;
+const K_ARY: usize = 8;
 
 const PRED_DUMMY_VALUE: f64 = -f64::INFINITY;
 const SUCC_DUMMY_VALUE: f64 = f64::INFINITY;
@@ -23,10 +23,9 @@ pub struct QuantileWindow {
     block_data: Vec<QuantileWindowBigBlock>,
     queue_data: Vec<f64>,
 
-    pred_heap: Vec<QuantileWindowHeapNode>,
-    pred_heap_block_indizes: Vec<usize>,
-    succ_heap: Vec<QuantileWindowHeapNode>,
-    succ_heap_block_indizes: Vec<usize>,
+    trees_leafs_starting_index: usize,
+    pred_tree: Vec<QuantileWindowTreeNode>,
+    succ_tree: Vec<QuantileWindowTreeNode>,
 }
 
 pub struct QuantileWindowBigBlock {
@@ -38,7 +37,7 @@ pub struct QuantileWindowBigBlock {
 }
 
 #[derive(Clone, Copy)]
-struct QuantileWindowHeapNode {
+struct QuantileWindowTreeNode {
     value: f64,
     block_index: usize,
 }
@@ -77,10 +76,7 @@ impl QuantileWindow {
     pub fn new(window_size: usize, quantile: f64) -> QuantileWindow {
         let needed_blocks = calculate_needed_big_blocks(window_size);
         let needed_queue_size = window_size;
-
-        // Exp
-        let needed_heap_blocks = (needed_blocks + K_ARY_HEAP - 1) / K_ARY_HEAP;
-        let needed_heaps_size = K_ARY_HEAP * needed_heap_blocks + 1;
+        let needed_trees_metadata = tree_calculate_metadata(needed_blocks);
 
         let mut result_window = QuantileWindow {
             size: window_size,
@@ -95,10 +91,15 @@ impl QuantileWindow {
             actual_block: 0,
             block_data: Vec::with_capacity(needed_blocks),
             queue_data: vec![0.0; needed_queue_size],
-            pred_heap: vec![QuantileWindowHeapNode { block_index: 0, value: PRED_DUMMY_VALUE }; needed_heaps_size],
-            pred_heap_block_indizes: vec![0; needed_heaps_size],
-            succ_heap: vec![QuantileWindowHeapNode { block_index: 0, value: SUCC_DUMMY_VALUE }; needed_heaps_size],
-            succ_heap_block_indizes: vec![0; needed_heaps_size],
+            trees_leafs_starting_index: needed_trees_metadata.0,
+            pred_tree: vec![QuantileWindowTreeNode {
+                value: PRED_DUMMY_VALUE,
+                block_index: 0,
+            }; needed_trees_metadata.1],
+            succ_tree: vec![QuantileWindowTreeNode {
+                value: SUCC_DUMMY_VALUE,
+                block_index: 0,
+            }; needed_trees_metadata.1],
         };
 
         let mut current_block = 0;
@@ -145,18 +146,18 @@ impl QuantileWindow {
         let mut global_floor_big_block_index = global_floor_candidate.block_index;
         initialize_block_tracker(&mut self.block_data, &global_floor_candidate);
 
-        pred_heap_initial_build(&mut self.block_data,
-            &mut self.pred_heap,
-            &mut self.pred_heap_block_indizes);
-        succ_heap_initial_build(&mut self.block_data,
-            &mut self.succ_heap,
-            &mut self.succ_heap_block_indizes,
+        pred_tree_initial_build(&self.block_data,
+            &mut self.pred_tree,
+            self.trees_leafs_starting_index);
+        succ_tree_initial_build(&self.block_data,
+            &mut self.succ_tree,
+            self.trees_leafs_starting_index,
             global_floor_big_block_index);
 
         let mut duplicates_to_skip = selection_result.duplicates_to_skip;
         while duplicates_to_skip > 0 {
             let new_floor_data = unsafe {
-                *self.succ_heap.get_unchecked(0)
+                *self.succ_tree.get_unchecked(0)
             };
             let new_floor_big_block_index = new_floor_data.block_index;
 
@@ -170,25 +171,25 @@ impl QuantileWindow {
                 old_floor_big_block.ran_out_right = true;
             }
 
-            pred_heap_update(old_floor_big_block,
+            pred_tree_update(old_floor_big_block,
                 old_floor_big_block_index,
-                &mut self.pred_heap,
-                &mut self.pred_heap_block_indizes);
+                &mut self.pred_tree,
+                self.trees_leafs_starting_index);
 
-            succ_heap_update(old_floor_big_block,
+            succ_tree_update(old_floor_big_block,
                 old_floor_big_block_index,
-                &mut self.succ_heap,
-                &mut self.succ_heap_block_indizes,
+                &mut self.succ_tree,
+                self.trees_leafs_starting_index,
                 new_floor_big_block_index);
 
             let new_floor_big_block = unsafe {
                 self.block_data.get_unchecked(new_floor_big_block_index)
             };
 
-            succ_heap_update(new_floor_big_block,
+            succ_tree_update(new_floor_big_block,
                 new_floor_big_block_index,
-                &mut self.succ_heap,
-                &mut self.succ_heap_block_indizes,
+                &mut self.succ_tree,
+                self.trees_leafs_starting_index,
                 new_floor_big_block_index);
 
             global_floor_big_block_index = new_floor_big_block_index;
@@ -226,17 +227,17 @@ impl QuantileWindow {
         actual_block.ran_out_right = update_result.ran_out_right;
 
         if update_result.update_pred_heap {
-            pred_heap_update(actual_block,
+            pred_tree_update(actual_block,
                 actual_block_index,
-                &mut self.pred_heap,
-                &mut self.pred_heap_block_indizes);
+                &mut self.pred_tree,
+                self.trees_leafs_starting_index);
         }
 
         if update_result.update_succ_heap {
-            succ_heap_update(actual_block,
+            succ_tree_update(actual_block,
                 actual_block_index,
-                &mut self.succ_heap,
-                &mut self.succ_heap_block_indizes,
+                &mut self.succ_tree,
+                self.trees_leafs_starting_index,
                 self.actual_floor_big_block);
         }
 
@@ -464,17 +465,17 @@ impl QuantileWindow {
 
     fn update_global_to_successor(&mut self) {
         let new_floor_data = unsafe {
-            *self.succ_heap.get_unchecked(0)
+            *self.succ_tree.get_unchecked(0)
         };
 
         let new_floor_big_block = unsafe {
             self.block_data.get_unchecked_mut(new_floor_data.block_index)
         };
 
-        succ_heap_update(new_floor_big_block,
+        succ_tree_update(new_floor_big_block,
             new_floor_data.block_index,
-            &mut self.succ_heap,
-            &mut self.succ_heap_block_indizes,
+            &mut self.succ_tree,
+            self.trees_leafs_starting_index,
             new_floor_data.block_index);
 
         self.actual_floor_big_block = new_floor_data.block_index;
@@ -486,7 +487,7 @@ impl QuantileWindow {
             result_vec.push(self.actual_floor_value);
         } else {
             let successor_value = unsafe {
-                self.succ_heap.get_unchecked(0).value
+                self.succ_tree.get_unchecked(0).value
             };
 
             let interpolated_result = calculate_interpolated_quantile(self.searched_rank,
@@ -516,18 +517,18 @@ impl QuantileWindow {
             }
 
             let new_floor_data = unsafe {
-                *self.succ_heap.get_unchecked(0)
+                *self.succ_tree.get_unchecked(0)
             };
 
-            pred_heap_update(old_floor_big_block,
+            pred_tree_update(old_floor_big_block,
                 old_floor_big_block_index,
-                &mut self.pred_heap,
-                &mut self.pred_heap_block_indizes);
+                &mut self.pred_tree,
+                self.trees_leafs_starting_index);
 
-            succ_heap_update(old_floor_big_block,
+            succ_tree_update(old_floor_big_block,
                 old_floor_big_block_index,
-                &mut self.succ_heap,
-                &mut self.succ_heap_block_indizes,
+                &mut self.succ_tree,
+                self.trees_leafs_starting_index,
                 new_floor_data.block_index);
 
             self.actual_floor_big_block = new_floor_data.block_index;
@@ -537,10 +538,10 @@ impl QuantileWindow {
                 self.block_data.get_unchecked(new_floor_data.block_index)
             };
 
-            succ_heap_update(new_floor_big_block,
+            succ_tree_update(new_floor_big_block,
                 new_floor_data.block_index,
-                &mut self.succ_heap,
-                &mut self.succ_heap_block_indizes,
+                &mut self.succ_tree,
+                self.trees_leafs_starting_index,
                 new_floor_data.block_index);
 
             self.actual_floor_rank += 1;
@@ -555,13 +556,13 @@ impl QuantileWindow {
             };
 
             let new_floor_data = unsafe {
-                *self.pred_heap.get_unchecked(0)
+                *self.pred_tree.get_unchecked(0)
             };
 
-            succ_heap_update(old_floor_big_block,
+            succ_tree_update(old_floor_big_block,
                 old_floor_big_block_index,
-                &mut self.succ_heap,
-                &mut self.succ_heap_block_indizes,
+                &mut self.succ_tree,
+                self.trees_leafs_starting_index,
                 new_floor_data.block_index);
 
             self.actual_floor_big_block = new_floor_data.block_index;
@@ -578,15 +579,15 @@ impl QuantileWindow {
                 new_floor_big_block.tracker -= 1;
             }
 
-            pred_heap_update(new_floor_big_block,
+            pred_tree_update(new_floor_big_block,
                 new_floor_data.block_index,
-                &mut self.pred_heap,
-                &mut self.pred_heap_block_indizes);
+                &mut self.pred_tree,
+                self.trees_leafs_starting_index);
 
-            succ_heap_update(new_floor_big_block,
+            succ_tree_update(new_floor_big_block,
                 new_floor_data.block_index,
-                &mut self.succ_heap,
-                &mut self.succ_heap_block_indizes,
+                &mut self.succ_tree,
+                self.trees_leafs_starting_index,
                 new_floor_data.block_index);
 
             self.actual_floor_rank -= 1;
@@ -808,11 +809,23 @@ fn initialize_block_tracker(block_data: &mut [QuantileWindowBigBlock],
     }
 }
 
-// Heaps
+// Trees
 
-fn pred_heap_initial_build(block_data: &mut [QuantileWindowBigBlock], pred_heap: &mut [QuantileWindowHeapNode],
-    pred_heap_block_indizes: &mut [usize]) {
-    for (index, block) in  block_data.iter_mut().enumerate() {
+#[inline(always)]
+fn tree_calculate_metadata(input_length: usize) -> (usize, usize) {
+    let mut needed_length = K_ARY;
+    while needed_length < input_length {
+        needed_length *= K_ARY;
+    }
+
+    let result_length = ((needed_length - 1) / (K_ARY - 1)) + needed_length;
+    let leafs_starting_index = result_length - needed_length;
+    (leafs_starting_index, result_length)
+}
+
+fn pred_tree_initial_build(block_data: &[QuantileWindowBigBlock], pred_tree: &mut [QuantileWindowTreeNode],
+    tree_leafs_starting_index: usize) {
+    for (index, block) in block_data.iter().enumerate() {
         let current_block_tracker = block.tracker;
         let pred_value = if block.ran_out_right {
             unsafe {
@@ -826,19 +839,59 @@ fn pred_heap_initial_build(block_data: &mut [QuantileWindowBigBlock], pred_heap:
             }
         };
 
+        let target_index = tree_leafs_starting_index + index;
         unsafe {
-            let target_node = pred_heap.get_unchecked_mut(index);
-            target_node.value = pred_value;
-            target_node.block_index = index;
-            *pred_heap_block_indizes.get_unchecked_mut(index) = index;
+            let current_node = pred_tree.get_unchecked_mut(target_index);
+            current_node.value = pred_value;
+            current_node.block_index = index;
+        }
+    }
+
+    let mut current_index = tree_leafs_starting_index - 1;
+    loop {
+        let max_child_index = pred_tree_max_child(pred_tree, current_index);
+        let max_node = unsafe {
+            pred_tree.get_unchecked(max_child_index)
+        };
+
+        unsafe {
+            *pred_tree.get_unchecked_mut(current_index) = *max_node;
         }
 
-        pred_heap_heapify_up(pred_heap, pred_heap_block_indizes, index);
+        if current_index == 0 {
+            break;
+        }
+
+        current_index -= 1;
     }
 }
 
-fn pred_heap_update(target_block: &QuantileWindowBigBlock, target_block_index: usize,
-    pred_heap: &mut [QuantileWindowHeapNode], pred_heap_block_indizes: &mut [usize]) {
+fn pred_tree_max_child(pred_tree: &[QuantileWindowTreeNode], position: usize) -> usize {
+    let first_child = tree_child_index(position, 1);
+
+    let mut best = first_child;
+    let mut current_node = unsafe {
+        pred_tree.get_unchecked(best)
+    };
+    let mut best_value = current_node.value;
+
+    for child in 1..K_ARY {
+        let current_child_index = first_child + child;
+        current_node = unsafe {
+            pred_tree.get_unchecked(current_child_index)
+        };
+
+        if current_node.value > best_value {
+            best = current_child_index;
+            best_value = current_node.value;
+        }
+    }
+
+    best
+}
+
+fn pred_tree_update(target_block: &QuantileWindowBigBlock, target_block_index: usize,
+    pred_tree: &mut [QuantileWindowTreeNode], tree_leafs_starting_index: usize) {
     let current_block_tracker = target_block.tracker;
     let pred_value = if target_block.ran_out_right {
         unsafe {
@@ -852,127 +905,60 @@ fn pred_heap_update(target_block: &QuantileWindowBigBlock, target_block_index: u
         }
     };
 
-    let target_node_position = unsafe {
-        *pred_heap_block_indizes.get_unchecked(target_block_index)
+    let mut current_index = tree_leafs_starting_index + target_block_index;
+    let current_node = unsafe {
+        let current_node = pred_tree.get_unchecked_mut(current_index);
+        current_node.value = pred_value;
+        *current_node
     };
 
-    let target_node = unsafe {
-        pred_heap.get_unchecked_mut(target_node_position)
-    };
-
-    let old_value = target_node.value;
-    target_node.value = pred_value;
-
-    if pred_value > old_value {
-        pred_heap_heapify_up(pred_heap, pred_heap_block_indizes, target_node_position);
-    } else {
-        pred_heap_heapify_down(pred_heap, pred_heap_block_indizes, target_node_position);
-    }
-}
-
-fn pred_heap_heapify_up(pred_heap: &mut [QuantileWindowHeapNode], pred_heap_block_indizes: &mut [usize],
-    mut position: usize) {
-    let temp_node_data = unsafe {
-        *pred_heap.get_unchecked(position)
-    };
-
-    while position > 0 {
-        let parent_node_position = heap_parent_index_calc(position, K_ARY_HEAP);
-        let parent_node_data = unsafe {
-            *pred_heap.get_unchecked(parent_node_position)
-        };
-
-        if temp_node_data.value <= parent_node_data.value {
-            break;
-        }
-
-        unsafe {
-            let current_node = pred_heap.get_unchecked_mut(position);
-            *current_node = parent_node_data;
-            *pred_heap_block_indizes.get_unchecked_mut(parent_node_data.block_index) = position;
-        }
-
-        position = parent_node_position;
-    }
-
-    unsafe {
-        let current_node = pred_heap.get_unchecked_mut(position);
-        *current_node = temp_node_data;
-        *pred_heap_block_indizes.get_unchecked_mut(temp_node_data.block_index) = position;
-    }
-}
-
-fn pred_heap_heapify_down(pred_heap: &mut [QuantileWindowHeapNode], pred_heap_block_indizes: &mut [usize],
-    mut position: usize) {
     loop {
-        let target_position = pred_heap_max_child(pred_heap, position);
-        if target_position == position {
+        let parent_index = tree_parent_index(current_index);
+        let parent_node = unsafe {
+            *pred_tree.get_unchecked(parent_index)
+        };
+
+        if current_node.block_index == parent_node.block_index {
+            if current_node.value > parent_node.value {
+                unsafe {
+                    let parent_node = pred_tree.get_unchecked_mut(parent_index);
+                    *parent_node = current_node;
+                }
+            } else {
+                let max_child_index = pred_tree_max_child(pred_tree, parent_index);
+                let max_node = unsafe {
+                    *pred_tree.get_unchecked(max_child_index)
+                };
+
+                unsafe {
+                    let parent_node = pred_tree.get_unchecked_mut(parent_index);
+                    *parent_node = max_node;
+                }
+            }
+        } else {
+            if current_node.value > parent_node.value {
+                unsafe {
+                    let parent_node = pred_tree.get_unchecked_mut(parent_index);
+                    *parent_node = current_node;
+                }
+            } else {
+                break;
+            }
+
+        }
+
+        current_index = parent_index;
+        if current_index == 0 {
             break;
         }
-
-        let position_node_data = unsafe {
-            *pred_heap.get_unchecked(position)
-        };
-
-        let child_node_data = unsafe {
-            *pred_heap.get_unchecked(target_position)
-        };
-
-        unsafe {
-            *pred_heap.get_unchecked_mut(position) = child_node_data;
-            *pred_heap.get_unchecked_mut(target_position) = position_node_data;
-
-            *pred_heap_block_indizes.get_unchecked_mut(position_node_data.block_index) = target_position;
-            *pred_heap_block_indizes.get_unchecked_mut(child_node_data.block_index) = position;
-        }
-
-        position = target_position;
     }
 }
 
-#[inline(always)]
-fn pred_heap_max_child(pred_heap: &[QuantileWindowHeapNode], position: usize) -> usize {
-    let heap_len = pred_heap.len();
-    let first_child = heap_child_index_calc(position, K_ARY_HEAP, 1);
-    if first_child >= heap_len { return  position; }
-    // let last_child = heap_child_index_calc(position, K_ARY_HEAP, K_ARY_HEAP)
-    //     .min(heap_len - 1);
-
-    let mut best = position;
-    let mut best_node_value = unsafe {
-        pred_heap.get_unchecked(best).value
-    };
-
-    for child in 0..K_ARY_HEAP {
-        let target_child = unsafe {
-            pred_heap.get_unchecked(first_child + child)
-        };
-
-        if target_child.value > best_node_value {
-            best = first_child + child;
-            best_node_value = target_child.value;
-        }
-    }
-
-    // for child in first_child..=last_child {
-    //     let target_child = unsafe {
-    //         pred_heap.get_unchecked(child)
-    //     };
-
-    //     if target_child.value > best_node_value {
-    //         best = child;
-    //         best_node_value = target_child.value;
-    //     }
-    // }
-
-    best
-}
-
-fn succ_heap_initial_build(block_data: &mut [QuantileWindowBigBlock],
-    succ_heap: &mut [QuantileWindowHeapNode], succ_heap_block_indizes: &mut [usize], floor_value_block_index: usize) {
-    for (index, block) in  block_data.iter_mut().enumerate() {
+fn succ_tree_initial_build(block_data: &[QuantileWindowBigBlock], succ_tree: &mut [QuantileWindowTreeNode],
+    tree_leafs_starting_index: usize, actual_floor_big_block: usize) {
+    for (index, block) in block_data.iter().enumerate() {
         let current_block_tracker = block.tracker;
-        let succ_index = if index == floor_value_block_index {
+        let succ_index = if index == actual_floor_big_block {
             current_block_tracker + 1
         } else if block.ran_out_right {
             block.length
@@ -988,19 +974,60 @@ fn succ_heap_initial_build(block_data: &mut [QuantileWindowBigBlock],
             SUCC_DUMMY_VALUE
         };
 
+        let target_index = tree_leafs_starting_index + index;
         unsafe {
-            let target_node = succ_heap.get_unchecked_mut(index);
-            target_node.value = succ_value;
-            target_node.block_index = index;
-            *succ_heap_block_indizes.get_unchecked_mut(index) = index;
+            let current_node = succ_tree.get_unchecked_mut(target_index);
+            current_node.value = succ_value;
+            current_node.block_index = index;
+        }
+    }
+
+    let mut current_index = tree_leafs_starting_index - 1;
+    loop {
+        let min_child_index = succ_tree_min_child(succ_tree, current_index);
+        let min_node = unsafe {
+            succ_tree.get_unchecked(min_child_index)
+        };
+
+        unsafe {
+            *succ_tree.get_unchecked_mut(current_index) = *min_node;
         }
 
-        succ_heap_heapify_up(succ_heap, succ_heap_block_indizes, index);
+        if current_index == 0 {
+            break;
+        }
+
+        current_index -= 1;
     }
 }
 
-fn succ_heap_update(target_block: &QuantileWindowBigBlock, target_block_index: usize,
-    succ_heap: &mut [QuantileWindowHeapNode], succ_heap_block_indizes: &mut [usize], actual_floor_big_block: usize) {
+fn succ_tree_min_child(succ_tree: &[QuantileWindowTreeNode], position: usize) -> usize {
+    let first_child = tree_child_index(position, 1);
+
+    let mut best = first_child;
+    let mut current_node = unsafe {
+        succ_tree.get_unchecked(best)
+    };
+    let mut best_value = current_node.value;
+
+    for child in 1..K_ARY {
+        let current_child_index = first_child + child;
+        current_node = unsafe {
+            succ_tree.get_unchecked(current_child_index)
+        };
+
+        if current_node.value < best_value {
+            best = current_child_index;
+            best_value = current_node.value;
+        }
+    }
+
+    best
+}
+
+fn succ_tree_update(target_block: &QuantileWindowBigBlock, target_block_index: usize,
+    succ_tree: &mut [QuantileWindowTreeNode], tree_leafs_starting_index: usize,
+    actual_floor_big_block: usize) {
     let current_block_tracker = target_block.tracker;
     let succ_index = if target_block_index == actual_floor_big_block {
         current_block_tracker + 1
@@ -1018,130 +1045,63 @@ fn succ_heap_update(target_block: &QuantileWindowBigBlock, target_block_index: u
         SUCC_DUMMY_VALUE
     };
 
-    let target_node_position = unsafe {
-        *succ_heap_block_indizes.get_unchecked(target_block_index)
+    let mut current_index = tree_leafs_starting_index + target_block_index;
+    let current_node = unsafe {
+        let current_node = succ_tree.get_unchecked_mut(current_index);
+        current_node.value = succ_value;
+        *current_node
     };
 
-    let target_node = unsafe {
-        succ_heap.get_unchecked_mut(target_node_position)
-    };
-
-    let old_value = target_node.value;
-    target_node.value = succ_value;
-
-    if succ_value < old_value {
-        succ_heap_heapify_up(succ_heap, succ_heap_block_indizes, target_node_position);
-    } else {
-        succ_heap_heapify_down(succ_heap, succ_heap_block_indizes, target_node_position);
-    }
-}
-
-fn succ_heap_heapify_up(succ_heap: &mut [QuantileWindowHeapNode], succ_heap_block_indizes: &mut [usize],
-    mut position: usize) {
-    let temp_node_data = unsafe {
-        *succ_heap.get_unchecked(position)
-    };
-
-    while position > 0 {
-        let parent_node_position = heap_parent_index_calc(position, K_ARY_HEAP);
-        let parent_node_data = unsafe {
-            *succ_heap.get_unchecked(parent_node_position)
-        };
-
-        if temp_node_data.value >= parent_node_data.value {
-            break;
-        }
-
-        unsafe {
-            let current_node = succ_heap.get_unchecked_mut(position);
-            *current_node = parent_node_data;
-            *succ_heap_block_indizes.get_unchecked_mut(parent_node_data.block_index) = position;
-        }
-
-        position = parent_node_position;
-    }
-
-    unsafe {
-        let current_node = succ_heap.get_unchecked_mut(position);
-        *current_node = temp_node_data;
-        *succ_heap_block_indizes.get_unchecked_mut(temp_node_data.block_index) = position;
-    }
-}
-
-fn succ_heap_heapify_down(succ_heap: &mut [QuantileWindowHeapNode], succ_heap_block_indizes: &mut [usize],
-    mut position: usize) {
     loop {
-        let target_position = succ_heap_min_child(succ_heap, position);
-        if target_position == position {
+        let parent_index = tree_parent_index(current_index);
+        let parent_node = unsafe {
+            succ_tree.get_unchecked_mut(parent_index)
+        };
+
+        if current_node.block_index == parent_node.block_index {
+            if current_node.value < parent_node.value {
+                unsafe {
+                    let parent_node = succ_tree.get_unchecked_mut(parent_index);
+                    *parent_node = current_node;
+                }
+            } else {
+                let min_child_index = succ_tree_min_child(succ_tree, parent_index);
+                let min_node = unsafe {
+                    *succ_tree.get_unchecked(min_child_index)
+                };
+
+                unsafe {
+                    let parent_node = succ_tree.get_unchecked_mut(parent_index);
+                    *parent_node = min_node;
+                }
+            }
+        } else {
+            if current_node.value < parent_node.value {
+                unsafe {
+                    let parent_node = succ_tree.get_unchecked_mut(parent_index);
+                    *parent_node = current_node;
+                }
+            } else {
+                break;
+            }
+
+        }
+
+        current_index = parent_index;
+        if current_index == 0 {
             break;
         }
-
-        let position_node_data = unsafe {
-            *succ_heap.get_unchecked(position)
-        };
-
-        let child_node_data = unsafe {
-            *succ_heap.get_unchecked(target_position)
-        };
-
-        unsafe {
-            *succ_heap.get_unchecked_mut(position) = child_node_data;
-            *succ_heap.get_unchecked_mut(target_position) = position_node_data;
-
-            *succ_heap_block_indizes.get_unchecked_mut(position_node_data.block_index) = target_position;
-            *succ_heap_block_indizes.get_unchecked_mut(child_node_data.block_index) = position;
-        }
-
-        position = target_position;
     }
 }
 
 #[inline(always)]
-fn succ_heap_min_child(succ_heap: &[QuantileWindowHeapNode], position: usize) -> usize {
-    let heap_len = succ_heap.len();
-    let first_child = heap_child_index_calc(position, K_ARY_HEAP, 1);
-    if first_child >= heap_len { return  position; }
-    // let last_child = heap_child_index_calc(position, K_ARY_HEAP, K_ARY_HEAP)
-    //     .min(heap_len - 1);
-
-    let mut best = position;
-    let mut best_node_value = unsafe {
-        succ_heap.get_unchecked(best).value
-    };
-
-    for child in 0..K_ARY_HEAP {
-        let target_child = unsafe {
-            succ_heap.get_unchecked(first_child + child)
-        };
-
-        if target_child.value < best_node_value {
-            best = first_child + child;
-            best_node_value = target_child.value;
-        }
-    }
-
-    // for child in first_child..=last_child {
-    //     let target_child = unsafe {
-    //         succ_heap.get_unchecked(child)
-    //     };
-
-    //     if target_child.value < best_node_value {
-    //         best = child;
-    //         best_node_value = target_child.value;
-    //     }
-    // }
-
-    best
+fn tree_child_index(position: usize, child_num: usize) -> usize {
+    (position * K_ARY) + child_num
 }
 
 #[inline(always)]
-fn heap_parent_index_calc(position: usize, k: usize) -> usize {
-    (position - 1) / k
-}
-
-#[inline(always)]
-fn heap_child_index_calc(position: usize, k: usize, num_child: usize) -> usize {
-    (k * position) + num_child
+fn tree_parent_index(position: usize) -> usize {
+    (position - 1) / K_ARY
 }
 
 // Update phase
