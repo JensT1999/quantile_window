@@ -6,23 +6,70 @@ use std::f64::consts::PI;
 
 // 50000 length und 193 windowSize
 const TEST_VEC_LEN: usize = 100000000;
-const WINDOW_SIZE: usize = 1000;
+
+// 100 + 796, window = 100
+const VALID_NUM_LENGTH: usize = 100;
+const NAN_NUM_LENGTH: usize = 19990;
+const TEST_VEC_LEN_2: usize = VALID_NUM_LENGTH + NAN_NUM_LENGTH;
+
+const WINDOW_SIZE: usize = 10000000;
 const QUANTILE: f64 = 0.5;
 
 fn main() {
     test_window();
 }
 
+fn test_nan_window() {
+    // let mut rng = StdRng::seed_from_u64(189);
+    let mut rng = rand::rng();
+    let mut window_vec: Vec<f64> = Vec::with_capacity(WINDOW_SIZE);
+
+    let mut count = 0;
+    while count < WINDOW_SIZE {
+        window_vec.push(rng.random_range(-1000.0..1000.0));
+        count += 1;
+    }
+
+    let mut test_vec: Vec<f64> = Vec::with_capacity(TEST_VEC_LEN_2);
+
+    let mut count = 0;
+    while count < VALID_NUM_LENGTH {
+        test_vec.push(rng.random_range(-1000.0..1000.0));
+        count += 1;
+    }
+
+    let mut count = 0;
+    while count < NAN_NUM_LENGTH {
+        test_vec.push(f64::NAN);
+        count += 1;
+    }
+
+    test_vec.shuffle(&mut rng);
+
+    window_vec.extend(test_vec.iter());
+
+    let cloned_input = window_vec.clone();
+    let test_quantiles = gen_test_quantiles(&cloned_input, WINDOW_SIZE, QUANTILE);
+
+    let result = window::rolling_quantile_window(&window_vec, WINDOW_SIZE, QUANTILE).unwrap();
+
+    // println!("Test Results {:?}", test_quantiles);
+    // println!("");
+    // println!("Results: {:?}", result);
+
+    assert_arrays(&test_quantiles, &result);
+}
+
 fn test_window() {
     // let mut rng = StdRng::seed_from_u64(42);
     let mut rng = rand::rng();
     let mut test_vec: Vec<f64> = Vec::with_capacity(TEST_VEC_LEN);
-    // let test_vec = generiere_log_normal_daten(TEST_VEC_LEN, 2.0, 0.5);
+    // let test_vec = generiere_finanz_daten(TEST_VEC_LEN);
 
-    // for index in 0..TEST_VEC_LEN{
-    //     let rand = rng.random_range(-1000.0..1000.0);
-    //     test_vec.push(rand);
-    // }
+    for index in 0..TEST_VEC_LEN{
+        let rand = rng.random_range(-1000.0..1000.0);
+        test_vec.push(rand);
+    }
 
     // Erzeugt ein heftiges Auf und Ab innerhalb des Fensters
     // for i in 0..TEST_VEC_LEN {
@@ -44,15 +91,15 @@ fn test_window() {
     // }
 
     // Der Median-Zerstörer
-    for i in 0..TEST_VEC_LEN {
-        // Ein linearer Trend, der den Median zwingt, permanent zu steigen
-        let trend = i as f64 * 0.001;
-        // Ein asymmetrisches Rauschen (Exponentialverteilung simuliert)
-        // Das zieht die Daten extrem in eine Richtung (Rechtsschreibe-Effekt)
-        let asymmetric_noise = (rng.random::<f64>()).ln() * -200.0;
+    // for i in 0..TEST_VEC_LEN {
+    //     // Ein linearer Trend, der den Median zwingt, permanent zu steigen
+    //     let trend = i as f64 * 0.001;
+    //     // Ein asymmetrisches Rauschen (Exponentialverteilung simuliert)
+    //     // Das zieht die Daten extrem in eine Richtung (Rechtsschreibe-Effekt)
+    //     let asymmetric_noise = (rng.random::<f64>()).ln() * -200.0;
 
-        test_vec.push(trend + asymmetric_noise);
-    }
+    //     test_vec.push(trend + asymmetric_noise);
+    // }
 
     // test_vec.sort_by(|a, b| a.partial_cmp(&b).unwrap());
 
@@ -76,27 +123,55 @@ fn test_window() {
     // assert_eq!(&test_quantiles, &r);
 }
 
-fn gen_test_quantiles(input_vec: &mut [f64], window_size: usize, quantile: f64) -> Vec<f64> {
+fn assert_arrays(vec1: &[f64], vec2: &[f64]) {
+    assert_eq!(vec1.len(), vec2.len());
+
+    let iterator = vec1.iter().zip(vec2.iter());
+    for (index, item) in iterator.enumerate() {
+        let (i1, i2) = item;
+
+        if !i1.is_nan() && !i2.is_nan() {
+            if *i1 != *i2 {
+                panic!("Panicked at index: {} {} {}", index, *i1, *i2);
+            }
+        } else {
+            if i1.is_nan() && i2.is_nan() {
+                continue;
+            } else {
+                panic!("Panicked at index {}", index);
+            }
+        }
+    }
+}
+
+fn gen_test_quantiles(input_vec: &[f64], window_size: usize, quantile: f64) -> Vec<f64> {
     let num_windows = input_vec.len() - window_size + 1;
     let mut result_vec = Vec::with_capacity(num_windows);
-    let searched_rank = quantile * (window_size - 1) as f64;
     for windows in 0..num_windows {
-        if windows == 784 {
+        if windows == 320 {
             println!("hi");
         }
 
-        let window_slice = &mut input_vec[windows..windows + window_size];
-        let mut cloned_window = Vec::with_capacity(window_slice.len());
-        window_slice.clone_into(&mut cloned_window);
-        cloned_window.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let floor_rank = searched_rank.floor() as usize;
+        let window_slice = &input_vec[windows..windows + window_size];
+        let nan_handled_result = count_and_remove_nans(window_slice);
+        let (nan_count, mut nan_free_array) = nan_handled_result;
 
+        let valid_num = window_size - nan_count;
+        if valid_num == 0 {
+            result_vec.push(f64::NAN);
+            continue;
+        }
+
+        nan_free_array.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        let searched_rank = quantile * (valid_num - 1) as f64;
+        let floor_rank = searched_rank.floor() as usize;
         if searched_rank % 1.0 == 0.0 {
-            result_vec.push(cloned_window[floor_rank]);
+            result_vec.push(nan_free_array[floor_rank]);
         } else {
-            let floor_value = cloned_window[floor_rank];
+            let floor_value = nan_free_array[floor_rank];
             let ceil_rank = floor_rank + 1;
-            let ceil_value = cloned_window[ceil_rank];
+            let ceil_value = nan_free_array[ceil_rank];
             let interpolated_quantile = floor_value + (ceil_value - floor_value) *
                 (searched_rank - searched_rank.floor());
             result_vec.push(interpolated_quantile);
@@ -104,6 +179,21 @@ fn gen_test_quantiles(input_vec: &mut [f64], window_size: usize, quantile: f64) 
     }
 
     result_vec
+}
+
+fn count_and_remove_nans(input_vec: &[f64]) -> (usize, Vec<f64>) {
+    let mut nan_count = 0;
+    let mut result_vec = vec![];
+    for input in input_vec {
+        if input.is_nan() {
+            nan_count += 1;
+            continue;
+        }
+
+        result_vec.push(*input);
+    }
+
+    (nan_count, result_vec)
 }
 
 fn generiere_realistische_daten(anzahl: usize, mittelwert: f64, std_abweichung: f64) -> Vec<f64> {
