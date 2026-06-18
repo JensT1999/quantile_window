@@ -142,19 +142,28 @@ impl QuantileWindow {
         result_window
     }
 
-    fn add(&mut self, value: f64) {
+    fn add(&mut self, new_entry: QuantileWindowEntry) {
+        let queue_index = self.current_size + self.nan_count;
+        self.queue_data[queue_index] = new_entry;
+
+        let current_block = &self.block_data[self.actual_block];
         let current_block =
-        if self.block_data[self.actual_block].length == BIG_BLOCK_SIZE {
+        if (current_block.length + current_block.placeholder_count) == BIG_BLOCK_SIZE {
             self.actual_block += 1;
             &mut self.block_data[self.actual_block]
         } else {
             &mut self.block_data[self.actual_block]
         };
 
-        current_block.data[current_block.length] = value;
-        self.queue_data[self.current_size] = QuantileWindowEntry::Valid(value);
-        current_block.length += 1;
-        self.current_size += 1;
+        if !new_entry.is_invalid() {
+            let new_value = new_entry.to_block_value();
+            current_block.data[current_block.length] = new_value;
+            current_block.length += 1;
+            self.current_size += 1;
+        } else {
+            current_block.placeholder_count += 1;
+            self.nan_count += 1;
+        }
     }
 
     fn prepare(&mut self) {
@@ -1117,6 +1126,9 @@ fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], search
 
     let mut selection_helpers: Vec<QuantileWindowSelectionHelper> = Vec::with_capacity(big_blocks_len);
     for (index, block) in block_data.iter().enumerate() {
+        // Maybe überarbeiten
+        let empty_block = block.length == 0;
+
         selection_helpers.push(QuantileWindowSelectionHelper {
             block_index: index,
             tracker: 0,
@@ -1124,7 +1136,7 @@ fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], search
             tracker_low: 0,
             data_slice: &block.data,
             tracker_value: 0.0,
-            invalid: false,
+            invalid: empty_block,
         });
     }
 
@@ -1228,13 +1240,20 @@ fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], search
 fn initialize_block_tracker(block_data: &mut [QuantileWindowBigBlock],
     floor_value_canidate: &QuantileWindowSelectionCandidate) {
     for (index, block) in block_data.iter_mut().enumerate() {
+        // Skipping empty blocks - no need to initialize
+        if block.length == 0 {
+            continue;
+        }
+
         // Muss eigentlich weg, da wegen Duplikaten der tracker immer beim ersten auftretenden Element gesetzt
         // werden muss. Interessanterweise hat aber genau dieser if-block auswirkungen auf die IPC beim 0,5 quantil??
         // So bleibt es performancetechnisch wie vorher. Der Compiler scheint hier laut KI zu komplexen Code zu
         // generieren ohne den IF.
         if index == floor_value_canidate.block_index {
             let mut block_tracker = floor_value_canidate.block_tracker;
-            let tracker_value = block.data[block_tracker];
+            let tracker_value = unsafe {
+                *block.data.get_unchecked(block_tracker)
+            };
             // Duplicate skipping intern
             while block_tracker > 0 && tracker_value == block.data[block_tracker - 1] {
                 block_tracker -= 1;
@@ -1706,12 +1725,22 @@ pub fn rolling_window(input_array: &[f64], window_size: usize, quantile: f64) ->
     let mut window = QuantileWindow::new(window_size, quantile);
 
     let input_slice = &input_array[0..window_size];
-    for value in input_slice {
-        window.add(*value);
+    for input in input_slice {
+        let input_entry = if input.is_nan() {
+            QuantileWindowEntry::Invalid
+        } else {
+            QuantileWindowEntry::Valid(*input)
+        };
+
+        window.add(input_entry);
     }
 
-    window.prepare();
-    window.result_quantile(&mut result_vec);
+    if window.current_size != 0 {
+        window.prepare();
+        window.result_quantile(&mut result_vec);
+    } else {
+        result_vec.push(f64::NAN);
+    }
 
     let input_slice = &input_array[window_size..];
     for (index, input) in input_slice.iter().enumerate() {
