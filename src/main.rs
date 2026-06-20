@@ -5,11 +5,11 @@ use std::{clone, time::Instant};
 use std::f64::consts::PI;
 
 // 50000 length und 193 windowSize
-const TEST_VEC_LEN: usize = 100000000;
+const TEST_VEC_LEN: usize = 10000;
 
 // 100 + 796, window = 100
-const VALID_NUM_LENGTH: usize = 1;
-const NAN_NUM_LENGTH: usize = 9999;
+const VALID_NUM_LENGTH: usize = 50000;
+const NAN_NUM_LENGTH: usize = 50000;
 const TEST_VEC_LEN_2: usize = VALID_NUM_LENGTH + NAN_NUM_LENGTH;
 
 const WINDOW_SIZE: usize = 1000;
@@ -49,9 +49,9 @@ fn test_nan_window() {
     // window_vec.extend(test_vec.iter());
 
     let cloned_input = test_vec.clone();
-    let test_quantiles = gen_test_quantiles(&cloned_input, WINDOW_SIZE, QUANTILE);
+    let test_quantiles = gen_test_quantiles_nan_static(&cloned_input, WINDOW_SIZE, QUANTILE);
 
-    let result = window::rolling_quantile_window(&test_vec, WINDOW_SIZE, QUANTILE).unwrap();
+    let result = window::rolling_quantile_window_fast(&test_vec, WINDOW_SIZE, QUANTILE).unwrap();
 
     // println!("Test Results {:?}", test_quantiles);
     // println!("");
@@ -66,10 +66,10 @@ fn test_window() {
     let mut test_vec: Vec<f64> = Vec::with_capacity(TEST_VEC_LEN);
     // let test_vec = generiere_finanz_daten(TEST_VEC_LEN);
 
-    for index in 0..TEST_VEC_LEN{
-        let rand = rng.random_range(-1000.0..1000.0);
-        test_vec.push(rand);
-    }
+    // for index in 0..TEST_VEC_LEN{
+    //     let rand = rng.random_range(-1000.0..1000.0);
+    //     test_vec.push(rand);
+    // }
 
     // Erzeugt ein heftiges Auf und Ab innerhalb des Fensters
     // for i in 0..TEST_VEC_LEN {
@@ -97,22 +97,36 @@ fn test_window() {
     //     // Ein asymmetrisches Rauschen (Exponentialverteilung simuliert)
     //     // Das zieht die Daten extrem in eine Richtung (Rechtsschreibe-Effekt)
     //     let asymmetric_noise = (rng.random::<f64>()).ln() * -200.0;
-
     //     test_vec.push(trend + asymmetric_noise);
     // }
+
+    let nan_probability = 0.5;
+    for i in 0..TEST_VEC_LEN {
+        if rng.random_bool(nan_probability) {
+            // Streut branchless/zufällig ein NaN ein
+            test_vec.push(f64::NAN);
+        } else {
+            // Das originale asymmetrische Muster bleibt voll erhalten:
+            // Ein linearer Trend, der den Median zwingt, permanent zu steigen
+            let trend = i as f64 * 0.001;
+            // Ein asymmetrisches Rauschen (Exponentialverteilung simuliert)
+            let asymmetric_noise = (rng.random::<f64>()).ln() * -200.0;
+            test_vec.push(trend + asymmetric_noise);
+        }
+    }
 
     // test_vec.sort_by(|a, b| a.partial_cmp(&b).unwrap());
 
     let inst = Instant::now();
-    // let mut cloned_vec = test_vec.clone();
-    // let test_quantiles = gen_test_quantiles(&mut cloned_vec,
-    //     WINDOW_SIZE, QUANTILE);
+    let mut cloned_vec = test_vec.clone();
+    let test_quantiles = gen_test_quantiles_nan_static(&mut cloned_vec,
+        WINDOW_SIZE, QUANTILE);
     let time = inst.elapsed().as_millis();
 
     println!("{} ms", time);
 
     let inst = Instant::now();
-    let r = window::rolling_quantile_window(&test_vec, WINDOW_SIZE, QUANTILE).unwrap();
+    let r = window::rolling_quantile_window_fast(&test_vec, WINDOW_SIZE, QUANTILE).unwrap();
     let time = inst.elapsed().as_millis();
 
     // println!("{:?}", r);
@@ -120,7 +134,7 @@ fn test_window() {
 
     // assert_eq!(r, *quantile.1);
 
-    // assert_eq!(&test_quantiles, &r);
+    assert_arrays(&test_quantiles, &r);
 }
 
 fn assert_arrays(vec1: &[f64], vec2: &[f64]) {
@@ -136,15 +150,16 @@ fn assert_arrays(vec1: &[f64], vec2: &[f64]) {
             }
         } else {
             if i1.is_nan() && i2.is_nan() {
-                continue;
-            } else {
-                panic!("Panicked at index {}", index);
+                if i1.is_sign_positive() && i2.is_sign_positive() {
+                    continue;
+                }
             }
+            panic!("Panicked at index {}", index);
         }
     }
 }
 
-fn gen_test_quantiles(input_vec: &[f64], window_size: usize, quantile: f64) -> Vec<f64> {
+fn gen_test_quantiles_nan_dynamic(input_vec: &[f64], window_size: usize, quantile: f64) -> Vec<f64> {
     let num_windows = input_vec.len() - window_size + 1;
     let mut result_vec = Vec::with_capacity(num_windows);
     for windows in 0..num_windows {
@@ -172,6 +187,32 @@ fn gen_test_quantiles(input_vec: &[f64], window_size: usize, quantile: f64) -> V
             let floor_value = nan_free_array[floor_rank];
             let ceil_rank = floor_rank + 1;
             let ceil_value = nan_free_array[ceil_rank];
+            let interpolated_quantile = floor_value + (ceil_value - floor_value) *
+                (searched_rank - searched_rank.floor());
+            result_vec.push(interpolated_quantile);
+        }
+    }
+
+    result_vec
+}
+
+fn gen_test_quantiles_nan_static(input_vec: &[f64], window_size: usize, quantile: f64) -> Vec<f64> {
+    let num_windows = input_vec.len() - window_size + 1;
+    let mut result_vec = Vec::with_capacity(num_windows);
+    for windows in 0..num_windows {
+        let window_slice = &input_vec[windows..windows + window_size];
+        let mut cloned_slice = Vec::with_capacity(window_size);
+        window_slice.clone_into(&mut cloned_slice);
+        cloned_slice.sort_by(|a, b| a.total_cmp(b));
+
+        let searched_rank = quantile * (window_size - 1) as f64;
+        let floor_rank = searched_rank.floor() as usize;
+        if searched_rank % 1.0 == 0.0 {
+            result_vec.push(cloned_slice[floor_rank]);
+        } else {
+            let floor_value = cloned_slice[floor_rank];
+            let ceil_rank = floor_rank + 1;
+            let ceil_value = cloned_slice[ceil_rank];
             let interpolated_quantile = floor_value + (ceil_value - floor_value) *
                 (searched_rank - searched_rank.floor());
             result_vec.push(interpolated_quantile);
