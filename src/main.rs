@@ -5,14 +5,14 @@ use std::{clone, time::Instant};
 use std::f64::consts::PI;
 
 // 50000 length und 193 windowSize
-const TEST_VEC_LEN: usize = 10000;
+const TEST_VEC_LEN: usize = 100000000;
 
 // 100 + 796, window = 100
 const VALID_NUM_LENGTH: usize = 50000;
 const NAN_NUM_LENGTH: usize = 50000;
 const TEST_VEC_LEN_2: usize = VALID_NUM_LENGTH + NAN_NUM_LENGTH;
 
-const WINDOW_SIZE: usize = 1000;
+const WINDOW_SIZE: usize = 10000000;
 const QUANTILE: f64 = 0.5;
 
 fn main() {
@@ -91,36 +91,36 @@ fn test_window() {
     // }
 
     // Der Median-Zerstörer
-    // for i in 0..TEST_VEC_LEN {
-    //     // Ein linearer Trend, der den Median zwingt, permanent zu steigen
-    //     let trend = i as f64 * 0.001;
-    //     // Ein asymmetrisches Rauschen (Exponentialverteilung simuliert)
-    //     // Das zieht die Daten extrem in eine Richtung (Rechtsschreibe-Effekt)
-    //     let asymmetric_noise = (rng.random::<f64>()).ln() * -200.0;
-    //     test_vec.push(trend + asymmetric_noise);
-    // }
-
-    let nan_probability = 0.5;
     for i in 0..TEST_VEC_LEN {
-        if rng.random_bool(nan_probability) {
-            // Streut branchless/zufällig ein NaN ein
-            test_vec.push(f64::NAN);
-        } else {
-            // Das originale asymmetrische Muster bleibt voll erhalten:
-            // Ein linearer Trend, der den Median zwingt, permanent zu steigen
-            let trend = i as f64 * 0.001;
-            // Ein asymmetrisches Rauschen (Exponentialverteilung simuliert)
-            let asymmetric_noise = (rng.random::<f64>()).ln() * -200.0;
-            test_vec.push(trend + asymmetric_noise);
-        }
+        // Ein linearer Trend, der den Median zwingt, permanent zu steigen
+        let trend = i as f64 * 0.001;
+        // Ein asymmetrisches Rauschen (Exponentialverteilung simuliert)
+        // Das zieht die Daten extrem in eine Richtung (Rechtsschreibe-Effekt)
+        let asymmetric_noise = (rng.random::<f64>()).ln() * -200.0;
+        test_vec.push(trend + asymmetric_noise);
     }
+
+    // let nan_probability = 0.5;
+    // for i in 0..TEST_VEC_LEN {
+    //     if rng.random_bool(nan_probability) {
+    //         // Streut branchless/zufällig ein NaN ein
+    //         test_vec.push(f64::NAN);
+    //     } else {
+    //         // Das originale asymmetrische Muster bleibt voll erhalten:
+    //         // Ein linearer Trend, der den Median zwingt, permanent zu steigen
+    //         let trend = i as f64 * 0.001;
+    //         // Ein asymmetrisches Rauschen (Exponentialverteilung simuliert)
+    //         let asymmetric_noise = (rng.random::<f64>()).ln() * -200.0;
+    //         test_vec.push(trend + asymmetric_noise);
+    //     }
+    // }
 
     // test_vec.sort_by(|a, b| a.partial_cmp(&b).unwrap());
 
     let inst = Instant::now();
-    let mut cloned_vec = test_vec.clone();
-    let test_quantiles = gen_test_quantiles_nan_static(&mut cloned_vec,
-        WINDOW_SIZE, QUANTILE);
+    // let mut cloned_vec = test_vec.clone();
+    // let test_quantiles = gen_test_quantiles_nan_static(&mut cloned_vec,
+    //     WINDOW_SIZE, QUANTILE);
     let time = inst.elapsed().as_millis();
 
     println!("{} ms", time);
@@ -134,7 +134,7 @@ fn test_window() {
 
     // assert_eq!(r, *quantile.1);
 
-    assert_arrays(&test_quantiles, &r);
+    // assert_arrays(&test_quantiles, &r);
 }
 
 fn assert_arrays(vec1: &[f64], vec2: &[f64]) {

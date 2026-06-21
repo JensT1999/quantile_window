@@ -1,12 +1,14 @@
 use std::{vec};
 
+use crate::window::utils::{ordered_double::OrderedDouble, sorting_networks, type_conversion};
+
 const SORTING_NETWORK_SIZE: usize = 16;
 const BIG_BLOCK_SIZE: usize = 64;
 const K_ARY: usize = 8;
 
-const PLACE_HOLDER_VALUE: i64 = convert_f64_to_i64(f64::NAN);
-const PRED_DUMMY_VALUE: i64 = convert_f64_to_i64(-f64::NAN);
-const SUCC_DUMMY_VALUE: i64 = convert_f64_to_i64(f64::NAN);
+const PLACE_HOLDER_VALUE: OrderedDouble = OrderedDouble::from_f64(f64::NAN);
+const PRED_DUMMY_VALUE: OrderedDouble = OrderedDouble::from_f64(-f64::NAN);
+const SUCC_DUMMY_VALUE: OrderedDouble = OrderedDouble::from_f64(f64::NAN);
 
 struct QuantileWindow {
     current_size: usize,
@@ -15,13 +17,13 @@ struct QuantileWindow {
     searched_rank: f64,
     global_floor_rank: usize,
     actual_floor_rank: usize,
-    actual_floor_value: i64,
+    actual_floor_value: OrderedDouble,
     actual_floor_big_block: usize,
     interpolation: bool,
 
     actual_block: usize,
     block_data: Vec<QuantileWindowBigBlock>,
-    queue_data: Vec<i64>,
+    queue_data: Vec<OrderedDouble>,
 
     trees_leafs_starting_index: usize,
     pred_tree: Vec<QuantileWindowTreeNode>,
@@ -29,7 +31,7 @@ struct QuantileWindow {
 }
 
 struct QuantileWindowBigBlock {
-    data: [i64; BIG_BLOCK_SIZE],
+    data: [OrderedDouble; BIG_BLOCK_SIZE],
     length: usize,
     update_index: usize,
     tracker: usize,
@@ -38,7 +40,7 @@ struct QuantileWindowBigBlock {
 
 #[derive(Clone, Copy)]
 struct QuantileWindowTreeNode {
-    value: i64,
+    value: OrderedDouble,
     block_index: usize,
 }
 
@@ -47,8 +49,8 @@ struct QuantileWindowSelectionHelper<'a> {
     tracker: usize,
     tracker_low: usize,
     tracker_high: usize,
-    data_slice: &'a [i64],
-    tracker_value: i64,
+    data_slice: &'a [OrderedDouble],
+    tracker_value: OrderedDouble,
     invalid: bool,
 }
 
@@ -56,7 +58,7 @@ struct QuantileWindowSelectionHelper<'a> {
 struct QuantileWindowSelectionCandidate {
     block_index: usize,
     block_tracker: usize,
-    block_value: i64,
+    block_value: OrderedDouble,
 }
 
 struct QuantileWindowSelectionResult {
@@ -84,12 +86,12 @@ impl QuantileWindow {
             searched_rank: 0.0,
             global_floor_rank: 0,
             actual_floor_rank: 0,
-            actual_floor_value: 0,
+            actual_floor_value: OrderedDouble::from_f64(0.0),
             actual_floor_big_block: 0,
             interpolation: false,
             actual_block: 0,
             block_data: Vec::with_capacity(needed_blocks),
-            queue_data: vec![0; needed_queue_size],
+            queue_data: vec![OrderedDouble::from_f64(0.0); needed_queue_size],
             trees_leafs_starting_index: needed_trees_metadata.0,
             pred_tree: vec![QuantileWindowTreeNode {
                 value: PRED_DUMMY_VALUE,
@@ -116,7 +118,7 @@ impl QuantileWindow {
         result_window
     }
 
-    fn add(&mut self, value: i64) {
+    fn add(&mut self, value: OrderedDouble) {
         let current_block =
         if self.block_data[self.actual_block].length == BIG_BLOCK_SIZE {
             self.actual_block += 1;
@@ -210,9 +212,10 @@ impl QuantileWindow {
         test_sorted_blocks(&self.block_data)
     }
 
-    fn update_window(&mut self, new_value: i64) {
+    fn update_window(&mut self, new_value: OrderedDouble) {
         let actual_block_index = self.actual_block;
-        let insertion_indizes = self.update_block_elements(new_value);
+        let old_value = self.update_queue_get_old_value(new_value);
+        let insertion_indizes = self.update_block_elements(new_value, old_value);
 
         let update_result = if actual_block_index == self.actual_floor_big_block {
             self.update_floor_block(new_value, insertion_indizes)
@@ -254,22 +257,37 @@ impl QuantileWindow {
         }
     }
 
-    fn update_block_elements(&mut self, new_value: i64) -> (usize, usize) {
+    fn update_queue_get_old_value(&mut self, new_value: OrderedDouble) -> OrderedDouble {
         let actual_block_index = self.actual_block;
-        let result_inidizes = unsafe {
-            let actual_block = self.block_data.get_unchecked_mut(actual_block_index);
-            let block_slice = actual_block.data.get_unchecked_mut(0..actual_block.length);
-            let queue_ref = self.queue_data.get_unchecked_mut((actual_block_index * BIG_BLOCK_SIZE) +
-                actual_block.update_index);
-            let old_value = *queue_ref;
-            *queue_ref = new_value;
-            update_shift_in(block_slice, new_value, old_value)
+        let actual_block = unsafe {
+            self.block_data.get_unchecked(actual_block_index)
         };
 
-        result_inidizes
+        let queue_index = (actual_block_index * BIG_BLOCK_SIZE) + actual_block.update_index;
+        let queue_ref = unsafe {
+            self.queue_data.get_unchecked_mut(queue_index)
+        };
+
+        let old_value = *queue_ref;
+        *queue_ref = new_value;
+
+        old_value
     }
 
-    fn update_std_block(&mut self, new_value: i64, insertion_indizes: (usize, usize)) -> QuantileWindowUpdateResult {
+    fn update_block_elements(&mut self, new_value: OrderedDouble, old_value: OrderedDouble) -> (usize, usize) {
+        let actual_block_index = self.actual_block;
+        let actual_block = unsafe {
+            self.block_data.get_unchecked_mut(actual_block_index)
+        };
+        let block_slice = unsafe {
+            actual_block.data.get_unchecked_mut(0..actual_block.length)
+        };
+
+        update_shift_in(block_slice, new_value, old_value)
+    }
+
+    fn update_std_block(&mut self, new_value: OrderedDouble, insertion_indizes: (usize, usize)) ->
+        QuantileWindowUpdateResult {
         let actual_block_index = self.actual_block;
         let actual_block = unsafe {
             self.block_data.get_unchecked(actual_block_index)
@@ -362,7 +380,7 @@ impl QuantileWindow {
         };
     }
 
-    fn update_floor_block(&mut self, new_value: i64, insertion_indizes: (usize, usize)) ->
+    fn update_floor_block(&mut self, new_value: OrderedDouble, insertion_indizes: (usize, usize)) ->
         QuantileWindowUpdateResult {
         let actual_block_index = self.actual_block;
         let actual_block = unsafe {
@@ -484,14 +502,14 @@ impl QuantileWindow {
     }
 
     fn result_quantile(&mut self, result_vec: &mut Vec<f64>) {
-        let floor_value: f64 = convert_i64_to_f64(self.actual_floor_value);
+        let floor_value: f64 = self.actual_floor_value.to_f64();
         if !self.interpolation {
             result_vec.push(floor_value);
         } else {
             let successor_value = unsafe {
                 self.succ_tree.get_unchecked(0).value
             };
-            let successor_value = convert_i64_to_f64(successor_value);
+            let successor_value = successor_value.to_f64();
 
             let interpolated_result = calculate_interpolated_quantile(self.searched_rank,
                 floor_value,
@@ -616,7 +634,7 @@ fn initial_sort(big_blocks: &mut [QuantileWindowBigBlock]) {
             let slice_start_index = current_slice * SORTING_NETWORK_SIZE;
             let slice_end_index = slice_start_index + SORTING_NETWORK_SIZE;
             let target_slice = &mut big_block.data[slice_start_index..slice_end_index];
-            sorting_network_16(target_slice);
+            sorting_networks::sorting_network_16::<OrderedDouble>(target_slice);
             current_slice += 1;
         }
     }
@@ -628,8 +646,9 @@ fn merge_to_big_blocks(big_blocks: &mut [QuantileWindowBigBlock]) {
     }
 }
 
-fn k_way_merge_tiny_block(data: &mut [i64; BIG_BLOCK_SIZE]) {
-    let mut temp_data_vec = vec![0; BIG_BLOCK_SIZE];
+fn k_way_merge_tiny_block(data: &mut [OrderedDouble; BIG_BLOCK_SIZE]) {
+    let mut temp_data_vec = [OrderedDouble::from_f64(0.0);
+        BIG_BLOCK_SIZE];
     temp_data_vec.copy_from_slice(data);
 
     const TINY_BLOCKS: usize = BIG_BLOCK_SIZE / SORTING_NETWORK_SIZE;
@@ -681,15 +700,17 @@ fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], search
             tracker_high: block.length,
             tracker_low: 0,
             data_slice: &block.data,
-            tracker_value: 0,
+            tracker_value: OrderedDouble::from_f64(0.0),
             invalid: false,
         });
     }
 
     let mut pivot_candidates: Vec<QuantileWindowSelectionCandidate> = vec![
-        QuantileWindowSelectionCandidate { block_index: 0,
+        QuantileWindowSelectionCandidate {
+            block_index: 0,
             block_tracker: 0,
-            block_value: 0 };
+            block_value: OrderedDouble::from_f64(0.0)
+        };
             big_blocks_len];
 
     loop {
@@ -1108,7 +1129,8 @@ fn tree_parent_index(position: usize) -> usize {
 
 // Update phase
 
-fn update_shift_in(block_data_slice: &mut [i64], new_value: i64, old_value: i64) -> (usize, usize) {
+fn update_shift_in(block_data_slice: &mut [OrderedDouble], new_value: OrderedDouble,
+    old_value: OrderedDouble) -> (usize, usize) {
     let index_old_value = block_data_slice.iter().filter(|&&x| x < old_value).count();
     let index_new_value = if new_value < old_value {
         shift_in_backwards(block_data_slice, index_old_value, new_value)
@@ -1123,7 +1145,7 @@ fn update_shift_in(block_data_slice: &mut [i64], new_value: i64, old_value: i64)
 }
 
 #[inline(always)]
-fn shift_in_backwards(data: &mut [i64], old_value_index: usize, new_value: i64) -> usize {
+fn shift_in_backwards(data: &mut [OrderedDouble], old_value_index: usize, new_value: OrderedDouble) -> usize {
     let mut index = old_value_index;
     unsafe {
         while (index > 0) && (new_value < *data.get_unchecked(index - 1)) {
@@ -1138,7 +1160,7 @@ fn shift_in_backwards(data: &mut [i64], old_value_index: usize, new_value: i64) 
 }
 
 #[inline(always)]
-fn shift_in_forwards(data: &mut [i64], old_value_index: usize, new_value: i64) -> usize {
+fn shift_in_forwards(data: &mut [OrderedDouble], old_value_index: usize, new_value: OrderedDouble) -> usize {
     let mut index = old_value_index;
     unsafe {
         while (index < (data.len() - 1)) && (new_value > *data.get_unchecked(index + 1)) {
@@ -1156,7 +1178,7 @@ fn shift_in_forwards(data: &mut [i64], old_value_index: usize, new_value: i64) -
 
 fn test_sorted_blocks(block_data: &[QuantileWindowBigBlock]) -> bool {
     for block in block_data {
-        let mut current_value = convert_f64_to_i64(-f64::NAN);
+        let mut current_value = OrderedDouble::from_f64(-f64::NAN);
         for value in block.data {
             if value >= current_value {
                 current_value = value;
@@ -1169,107 +1191,6 @@ fn test_sorted_blocks(block_data: &[QuantileWindowBigBlock]) -> bool {
     true
 }
 
-// Sorting network
-
-fn sorting_network_16(data: &mut [i64]) {
-    sorting_network_cas(data, 0, 15);
-    sorting_network_cas(data, 1, 14);
-    sorting_network_cas(data, 2, 13);
-    sorting_network_cas(data, 3, 12);
-    sorting_network_cas(data, 4, 11);
-    sorting_network_cas(data, 5, 10);
-    sorting_network_cas(data, 6, 9);
-    sorting_network_cas(data, 7, 8);
-
-    sorting_network_cas(data, 0, 5);
-    sorting_network_cas(data, 1, 7);
-    sorting_network_cas(data, 2, 6);
-    sorting_network_cas(data, 3, 4);
-    sorting_network_cas(data, 8, 14);
-    sorting_network_cas(data, 9, 13);
-    sorting_network_cas(data, 10, 15);
-    sorting_network_cas(data, 11, 12);
-
-    sorting_network_cas(data, 0, 2);
-    sorting_network_cas(data, 1, 3);
-    sorting_network_cas(data, 4, 8);
-    sorting_network_cas(data, 5, 9);
-    sorting_network_cas(data, 6, 10);
-    sorting_network_cas(data, 7, 11);
-    sorting_network_cas(data, 12, 14);
-    sorting_network_cas(data, 13, 15);
-
-    sorting_network_cas(data, 0, 1);
-    sorting_network_cas(data, 2, 7);
-    sorting_network_cas(data, 3, 5);
-    sorting_network_cas(data, 4, 6);
-    sorting_network_cas(data, 8, 13);
-    sorting_network_cas(data, 9, 11);
-    sorting_network_cas(data, 10, 12);
-    sorting_network_cas(data, 14, 15);
-
-    sorting_network_cas(data, 1, 3);
-    sorting_network_cas(data, 2, 4);
-    sorting_network_cas(data, 5, 10);
-    sorting_network_cas(data, 6, 9);
-    sorting_network_cas(data, 7, 8);
-    sorting_network_cas(data, 11, 13);
-    sorting_network_cas(data, 12, 14);
-
-    sorting_network_cas(data, 1, 2);
-    sorting_network_cas(data, 3, 4);
-    sorting_network_cas(data, 5, 7);
-    sorting_network_cas(data, 8, 10);
-    sorting_network_cas(data, 11, 12);
-    sorting_network_cas(data, 13, 14);
-
-    sorting_network_cas(data, 2, 3);
-    sorting_network_cas(data, 4, 6);
-    sorting_network_cas(data, 9, 11);
-    sorting_network_cas(data, 12, 13);
-
-    sorting_network_cas(data, 4, 5);
-    sorting_network_cas(data, 6, 7);
-    sorting_network_cas(data, 8, 9);
-    sorting_network_cas(data, 10, 11);
-
-    sorting_network_cas(data, 3, 4);
-    sorting_network_cas(data, 5, 6);
-    sorting_network_cas(data, 7,8);
-    sorting_network_cas(data, 9, 10);
-    sorting_network_cas(data, 11, 12);
-
-    sorting_network_cas(data, 6, 7);
-    sorting_network_cas(data, 8, 9);
-}
-
-#[inline(always)]
-fn sorting_network_cas(data: &mut [i64], index1: usize, index2: usize) {
-    let data_tup = unsafe {
-        (*data.get_unchecked(index1), *data.get_unchecked(index2))
-    };
-
-    if data_tup.0 > data_tup.1 {
-        unsafe {
-            *data.get_unchecked_mut(index1) = data_tup.1;
-            *data.get_unchecked_mut(index2) = data_tup.0;
-        }
-    }
-}
-
-// Converting
-#[inline(always)]
-const fn convert_f64_to_i64(value: f64) -> i64 {
-    let result_bits = value.to_bits() as i64;
-    result_bits ^ (((result_bits >> 63) as u64) >> 1) as i64
-}
-
-#[inline(always)]
-const fn convert_i64_to_f64(value: i64) -> f64 {
-    let result = value ^ (((value >> 63) as u64) >> 1) as i64;
-    f64::from_bits(result as u64)
-}
-
 // Main function
 pub fn rolling_window(input_array: &[f64], window_size: usize, quantile: f64) -> Vec<f64> {
     let result_vec_len = (input_array.len() - window_size) + 1;
@@ -1278,7 +1199,7 @@ pub fn rolling_window(input_array: &[f64], window_size: usize, quantile: f64) ->
 
     let input_slice = &input_array[0..window_size];
     for value in input_slice {
-        let input_value = convert_f64_to_i64(*value);
+        let input_value = OrderedDouble::from_f64(*value);
         window.add(input_value);
     }
 
@@ -1287,7 +1208,7 @@ pub fn rolling_window(input_array: &[f64], window_size: usize, quantile: f64) ->
 
     let input_slice = &input_array[window_size..];
     for input in input_slice {
-        let input_value = convert_f64_to_i64(*input);
+        let input_value = OrderedDouble::from_f64(*input);
         window.update_window(input_value);
         window.adjust_and_result_quantile(&mut result_vec);
     }

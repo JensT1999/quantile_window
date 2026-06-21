@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 mod quantile_window;
+mod utils;
 
 const QUANTILE_EPSILON: f64 = 1e-9;
 
