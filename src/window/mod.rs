@@ -1,7 +1,6 @@
 use std::fmt::Display;
 
-mod quantile_window_dynamic;
-mod quantile_window_fast;
+mod quantile_window;
 
 const QUANTILE_EPSILON: f64 = 1e-9;
 
@@ -24,7 +23,7 @@ impl Display for WindowError {
 
 impl std::error::Error for WindowError {}
 
-pub fn rolling_quantile_window_dynamic(input_array: &[f64], window_size: usize, quantile: f64) ->
+pub fn rolling_quantile_window(input_array: &[f64], window_size: usize, quantile: f64) ->
     Result<Vec<f64>, WindowError> {
     if input_array.len() == 0 || window_size == 0 {
         return Err(WindowError::SizingError);
@@ -34,21 +33,7 @@ pub fn rolling_quantile_window_dynamic(input_array: &[f64], window_size: usize, 
         return Err(WindowError::InvalidQuantileError);
     }
 
-    let result_vec = quantile_window_dynamic::rolling_window(input_array, window_size, quantile);
-    Ok(result_vec)
-}
-
-pub fn rolling_quantile_window_fast(input_array: &[f64], window_size: usize, quantile: f64) ->
-    Result<Vec<f64>, WindowError> {
-    if input_array.len() == 0 || window_size == 0 {
-        return Err(WindowError::SizingError);
-    }
-
-    if !valid_quantile(quantile) {
-        return Err(WindowError::InvalidQuantileError);
-    }
-
-    let result_vec = quantile_window_fast::rolling_window(input_array, window_size, quantile);
+    let result_vec = quantile_window::rolling_window(input_array, window_size, quantile);
     Ok(result_vec)
 }
 

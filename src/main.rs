@@ -51,7 +51,7 @@ fn test_nan_window() {
     let cloned_input = test_vec.clone();
     let test_quantiles = gen_test_quantiles_nan_static(&cloned_input, WINDOW_SIZE, QUANTILE);
 
-    let result = window::rolling_quantile_window_fast(&test_vec, WINDOW_SIZE, QUANTILE).unwrap();
+    let result = window::rolling_quantile_window(&test_vec, WINDOW_SIZE, QUANTILE).unwrap();
 
     // println!("Test Results {:?}", test_quantiles);
     // println!("");
@@ -126,7 +126,7 @@ fn test_window() {
     println!("{} ms", time);
 
     let inst = Instant::now();
-    let r = window::rolling_quantile_window_fast(&test_vec, WINDOW_SIZE, QUANTILE).unwrap();
+    let r = window::rolling_quantile_window(&test_vec, WINDOW_SIZE, QUANTILE).unwrap();
     let time = inst.elapsed().as_millis();
 
     // println!("{:?}", r);
