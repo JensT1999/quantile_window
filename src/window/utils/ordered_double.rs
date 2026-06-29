@@ -9,13 +9,16 @@ pub struct OrderedDouble {
 
 impl OrderedDouble {
 
+    pub const MAX: OrderedDouble = OrderedDouble::from_f64(f64::NAN);
+    pub const MIN: OrderedDouble = OrderedDouble::from_f64(-f64::NAN);
+
     pub const fn from_f64(value: f64) -> OrderedDouble {
         OrderedDouble {
             data: type_conversion::convert_f64_to_i64(value)
         }
     }
 
-    pub const fn to_f64(&self) -> f64 {
+    pub const fn to_f64(self) -> f64 {
         type_conversion::convert_i64_to_f64(self.data)
     }
 }

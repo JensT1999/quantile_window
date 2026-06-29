@@ -1,14 +1,15 @@
 use std::{vec};
 
-use crate::window::utils::{ordered_double::OrderedDouble, sorting_networks, type_conversion};
+use crate::window::utils::{ordered_double::OrderedDouble, ordered_double_slice::OrderedDoubleSlice, sorting_networks};
 
 const SORTING_NETWORK_SIZE: usize = 16;
-const BIG_BLOCK_SIZE: usize = 64;
+const BLOCK_SIZE: usize = 64;
+const SLICES_PER_BLOCK: usize = BLOCK_SIZE / SORTING_NETWORK_SIZE;
 const K_ARY: usize = 8;
 
-const PLACE_HOLDER_VALUE: OrderedDouble = OrderedDouble::from_f64(f64::NAN);
-const PRED_DUMMY_VALUE: OrderedDouble = OrderedDouble::from_f64(-f64::NAN);
-const SUCC_DUMMY_VALUE: OrderedDouble = OrderedDouble::from_f64(f64::NAN);
+const PLACE_HOLDER_VALUE: OrderedDouble = OrderedDouble::MAX;
+const PRED_DUMMY_VALUE: OrderedDouble = OrderedDouble::MIN;
+const SUCC_DUMMY_VALUE: OrderedDouble = OrderedDouble::MAX;
 
 struct QuantileWindow {
     current_size: usize,
@@ -22,7 +23,7 @@ struct QuantileWindow {
     interpolation: bool,
 
     actual_block: usize,
-    block_data: Vec<QuantileWindowBigBlock>,
+    block_data: Vec<QuantileWindowBlock>,
     queue_data: Vec<OrderedDouble>,
 
     trees_leafs_starting_index: usize,
@@ -30,12 +31,51 @@ struct QuantileWindow {
     succ_tree: Vec<QuantileWindowTreeNode>,
 }
 
-struct QuantileWindowBigBlock {
-    data: [OrderedDouble; BIG_BLOCK_SIZE],
+struct QuantileWindowBlock {
+    data: [OrderedDouble; BLOCK_SIZE],
     length: usize,
     update_index: usize,
     tracker: usize,
     ran_out_right: bool,
+}
+
+impl QuantileWindowBlock {
+
+    #[inline(always)]
+    fn get_predeccessor_value(&self) -> OrderedDouble {
+        let current_block_tracker = self.tracker;
+        if self.ran_out_right {
+            unsafe {
+                *self.data.get_unchecked(self.length - 1)
+            }
+        } else if current_block_tracker == 0 {
+            PRED_DUMMY_VALUE
+        } else {
+            unsafe {
+                *self.data.get_unchecked(current_block_tracker - 1)
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn get_successor_value(&self, is_actual_floor_block: bool) -> OrderedDouble {
+        let current_block_tracker = self.tracker;
+        let succ_index = if is_actual_floor_block {
+            current_block_tracker + 1
+        } else if self.ran_out_right {
+            self.length
+        } else {
+            current_block_tracker
+        };
+
+        if succ_index < self.length {
+            unsafe {
+                *self.data.get_unchecked(succ_index)
+            }
+        } else {
+            SUCC_DUMMY_VALUE
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -76,7 +116,7 @@ struct QuantileWindowUpdateResult {
 impl QuantileWindow {
 
     fn new(window_size: usize, quantile: f64) -> QuantileWindow {
-        let needed_blocks = calculate_needed_big_blocks(window_size);
+        let needed_blocks = calculate_needed_blocks(window_size);
         let needed_queue_size = window_size;
         let needed_trees_metadata = tree_calculate_metadata(needed_blocks);
 
@@ -105,8 +145,8 @@ impl QuantileWindow {
 
         let mut current_block = 0;
         while current_block < needed_blocks {
-            result_window.block_data.push(QuantileWindowBigBlock {
-                data: [PLACE_HOLDER_VALUE; BIG_BLOCK_SIZE],
+            result_window.block_data.push(QuantileWindowBlock {
+                data: [PLACE_HOLDER_VALUE; BLOCK_SIZE],
                 length: 0,
                 update_index: 0,
                 tracker: 0,
@@ -120,7 +160,7 @@ impl QuantileWindow {
 
     fn add(&mut self, value: OrderedDouble) {
         let current_block =
-        if self.block_data[self.actual_block].length == BIG_BLOCK_SIZE {
+        if self.block_data[self.actual_block].length == BLOCK_SIZE {
             self.actual_block += 1;
             &mut self.block_data[self.actual_block]
         } else {
@@ -135,13 +175,12 @@ impl QuantileWindow {
 
     fn prepare(&mut self) {
         initial_sort(&mut self.block_data);
-        merge_to_big_blocks(&mut self.block_data);
 
         let searched_rank = self.quantile * ((self.current_size - 1) as f64);
         let floor_rank = searched_rank.floor() as usize;
 
-        let selection_result =
-            find_global_floor_value_by_rank(&self.block_data ,floor_rank);
+        let selection_result = find_value_by_rank(&self.block_data,
+            floor_rank);
 
         let global_floor_candidate = selection_result.selection_candidate;
         let mut global_floor_big_block_index = global_floor_candidate.block_index;
@@ -155,6 +194,7 @@ impl QuantileWindow {
             self.trees_leafs_starting_index,
             global_floor_big_block_index);
 
+        // Muss definitiv noch in eigene methode
         let mut duplicates_to_skip = selection_result.duplicates_to_skip;
         while duplicates_to_skip > 0 {
             let new_floor_data = unsafe {
@@ -263,7 +303,7 @@ impl QuantileWindow {
             self.block_data.get_unchecked(actual_block_index)
         };
 
-        let queue_index = (actual_block_index * BIG_BLOCK_SIZE) + actual_block.update_index;
+        let queue_index = (actual_block_index * BLOCK_SIZE) + actual_block.update_index;
         let queue_ref = unsafe {
             self.queue_data.get_unchecked_mut(queue_index)
         };
@@ -283,7 +323,17 @@ impl QuantileWindow {
             actual_block.data.get_unchecked_mut(0..actual_block.length)
         };
 
-        update_shift_in(block_slice, new_value, old_value)
+        let old_value_index = block_slice.iter().filter(|&&x| x < old_value).count();
+        let new_value_index = if new_value > old_value {
+            block_slice.shift_in_forwards(old_value_index, new_value)
+        } else if new_value < old_value {
+            block_slice.shift_in_backwards(old_value_index, new_value)
+        } else {
+            block_slice[old_value_index] = new_value;
+            old_value_index
+        };
+
+        (old_value_index, new_value_index)
     }
 
     fn update_std_block(&mut self, new_value: OrderedDouble, insertion_indizes: (usize, usize)) ->
@@ -329,7 +379,7 @@ impl QuantileWindow {
             }
         }
 
-        if let false = update_tracker {
+        if !update_tracker {
             return QuantileWindowUpdateResult {
                 new_tracker,
                 ran_out_right,
@@ -372,12 +422,12 @@ impl QuantileWindow {
             ran_out_right = false;
         }
 
-        return QuantileWindowUpdateResult {
+        QuantileWindowUpdateResult {
             new_tracker,
             ran_out_right,
             update_pred_heap,
             update_succ_heap
-        };
+        }
     }
 
     fn update_floor_block(&mut self, new_value: OrderedDouble, insertion_indizes: (usize, usize)) ->
@@ -423,7 +473,7 @@ impl QuantileWindow {
             }
         }
 
-        if let false = update_tracker {
+        if !update_tracker {
             return QuantileWindowUpdateResult {
                 new_tracker,
                 ran_out_right,
@@ -617,8 +667,8 @@ impl QuantileWindow {
 }
 
 // Utils
-fn calculate_needed_big_blocks(window_size: usize) -> usize {
-    (window_size + (BIG_BLOCK_SIZE - 1)) / BIG_BLOCK_SIZE
+fn calculate_needed_blocks(window_size: usize) -> usize {
+    window_size.div_ceil(BLOCK_SIZE)
 }
 
 fn calculate_interpolated_quantile(searched_rank: f64, floor_value: f64, successor_value: f64) -> f64 {
@@ -626,35 +676,31 @@ fn calculate_interpolated_quantile(searched_rank: f64, floor_value: f64, success
 }
 
 // Initial phase
-fn initial_sort(big_blocks: &mut [QuantileWindowBigBlock]) {
-    let slices_per_block = BIG_BLOCK_SIZE / SORTING_NETWORK_SIZE;
-    for big_block in big_blocks {
+fn initial_sort(block_data: &mut [QuantileWindowBlock]) {
+    for block in block_data {
         let mut current_slice = 0;
-        while current_slice < slices_per_block {
+        while current_slice < SLICES_PER_BLOCK {
             let slice_start_index = current_slice * SORTING_NETWORK_SIZE;
             let slice_end_index = slice_start_index + SORTING_NETWORK_SIZE;
-            let target_slice = &mut big_block.data[slice_start_index..slice_end_index];
+            let target_slice = &mut block.data[slice_start_index..slice_end_index];
             sorting_networks::sorting_network_16::<OrderedDouble>(target_slice);
             current_slice += 1;
         }
+
+        k_way_merge_tiny_blocks(&mut block.data);
     }
 }
 
-fn merge_to_big_blocks(big_blocks: &mut [QuantileWindowBigBlock]) {
-    for big_block in big_blocks {
-        k_way_merge_tiny_block(&mut big_block.data);
-    }
-}
-
-fn k_way_merge_tiny_block(data: &mut [OrderedDouble; BIG_BLOCK_SIZE]) {
+fn k_way_merge_tiny_blocks(data: &mut [OrderedDouble; BLOCK_SIZE]) {
     let mut temp_data_vec = [OrderedDouble::from_f64(0.0);
-        BIG_BLOCK_SIZE];
+        BLOCK_SIZE];
     temp_data_vec.copy_from_slice(data);
 
-    const TINY_BLOCKS: usize = BIG_BLOCK_SIZE / SORTING_NETWORK_SIZE;
-    let mut tiny_blocks_ptr = [0; TINY_BLOCKS];
-    for index in 0..TINY_BLOCKS {
+    let mut tiny_blocks_ptr = [0; SLICES_PER_BLOCK];
+    let mut index = 0;
+    while index < SLICES_PER_BLOCK {
         tiny_blocks_ptr[index] = index * SORTING_NETWORK_SIZE;
+        index += 1;
     }
 
     let smallest_placeholder = PLACE_HOLDER_VALUE;
@@ -664,13 +710,13 @@ fn k_way_merge_tiny_block(data: &mut [OrderedDouble; BIG_BLOCK_SIZE]) {
         let mut target_block = 0;
         let mut found = false;
 
-        for index in 0..tiny_blocks_ptr.len() {
-            let temp_ptr_index = tiny_blocks_ptr[index];
-            if temp_ptr_index == (index * SORTING_NETWORK_SIZE) + SORTING_NETWORK_SIZE {
+        for (index, temp_ptr) in tiny_blocks_ptr.iter().enumerate() {
+            let max_ptr = (index * SORTING_NETWORK_SIZE) + SORTING_NETWORK_SIZE;
+            if *temp_ptr == max_ptr {
                 continue;
             }
 
-            let temp_value = temp_data_vec[temp_ptr_index];
+            let temp_value = temp_data_vec[*temp_ptr];
             if temp_value <= smallest {
                 smallest = temp_value;
                 target_block = index;
@@ -688,8 +734,7 @@ fn k_way_merge_tiny_block(data: &mut [OrderedDouble; BIG_BLOCK_SIZE]) {
     }
 }
 
-fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], searched_rank: usize) ->
-    QuantileWindowSelectionResult {
+fn find_value_by_rank(block_data: &[QuantileWindowBlock], searched_rank: usize) -> QuantileWindowSelectionResult {
     let big_blocks_len = block_data.len();
 
     let mut selection_helpers: Vec<QuantileWindowSelectionHelper> = Vec::with_capacity(big_blocks_len);
@@ -710,8 +755,7 @@ fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], search
             block_index: 0,
             block_tracker: 0,
             block_value: OrderedDouble::from_f64(0.0)
-        };
-            big_blocks_len];
+        }; big_blocks_len];
 
     loop {
         let mut active_blocks = 0;
@@ -804,13 +848,11 @@ fn find_global_floor_value_by_rank(block_data: &[QuantileWindowBigBlock], search
     }
 }
 
-fn initialize_block_tracker(block_data: &mut [QuantileWindowBigBlock],
+fn initialize_block_tracker(block_data: &mut [QuantileWindowBlock],
     floor_value_canidate: &QuantileWindowSelectionCandidate) {
     for (index, block) in block_data.iter_mut().enumerate() {
-        // Muss eigentlich weg, da wegen Duplikaten der tracker immer beim ersten auftretenden Element gesetzt
-        // werden muss. Interessanterweise hat aber genau dieser if-block auswirkungen auf die IPC beim 0,5 quantil??
-        // So bleibt es performancetechnisch wie vorher. Der Compiler scheint hier laut KI zu komplexen Code zu
-        // generieren ohne den IF.
+        // This if clause seems to be necessary for performance.
+        // Gemini told me that without the if clause the compiler seems to generate to complex code.
         if index == floor_value_canidate.block_index {
             let mut block_tracker = floor_value_canidate.block_tracker;
             let tracker_value = block.data[block_tracker];
@@ -847,22 +889,10 @@ fn tree_calculate_metadata(input_length: usize) -> (usize, usize) {
     (leafs_starting_index, result_length)
 }
 
-fn pred_tree_initial_build(block_data: &[QuantileWindowBigBlock], pred_tree: &mut [QuantileWindowTreeNode],
+fn pred_tree_initial_build(block_data: &[QuantileWindowBlock], pred_tree: &mut [QuantileWindowTreeNode],
     tree_leafs_starting_index: usize) {
     for (index, block) in block_data.iter().enumerate() {
-        let current_block_tracker = block.tracker;
-        let pred_value = if block.ran_out_right {
-            unsafe {
-                *block.data.get_unchecked(block.length - 1)
-            }
-        } else if current_block_tracker == 0 {
-            PRED_DUMMY_VALUE
-        } else {
-            unsafe {
-                *block.data.get_unchecked(current_block_tracker - 1)
-            }
-        };
-
+        let pred_value = block.get_predeccessor_value();
         let target_index = tree_leafs_starting_index + index;
         unsafe {
             let current_node = pred_tree.get_unchecked_mut(target_index);
@@ -914,21 +944,9 @@ fn pred_tree_max_child(pred_tree: &[QuantileWindowTreeNode], position: usize) ->
     best
 }
 
-fn pred_tree_update(target_block: &QuantileWindowBigBlock, target_block_index: usize,
+fn pred_tree_update(target_block: &QuantileWindowBlock, target_block_index: usize,
     pred_tree: &mut [QuantileWindowTreeNode], tree_leafs_starting_index: usize) {
-    let current_block_tracker = target_block.tracker;
-    let pred_value = if target_block.ran_out_right {
-        unsafe {
-            *target_block.data.get_unchecked(target_block.length - 1)
-        }
-    } else if current_block_tracker == 0 {
-        PRED_DUMMY_VALUE
-    } else {
-        unsafe {
-            *target_block.data.get_unchecked(current_block_tracker - 1)
-        }
-    };
-
+    let pred_value = target_block.get_predeccessor_value();
     let mut current_index = tree_leafs_starting_index + target_block_index;
     let current_node = unsafe {
         let current_node = pred_tree.get_unchecked_mut(current_index);
@@ -968,7 +986,6 @@ fn pred_tree_update(target_block: &QuantileWindowBigBlock, target_block_index: u
             } else {
                 break;
             }
-
         }
 
         current_index = parent_index;
@@ -978,25 +995,11 @@ fn pred_tree_update(target_block: &QuantileWindowBigBlock, target_block_index: u
     }
 }
 
-fn succ_tree_initial_build(block_data: &[QuantileWindowBigBlock], succ_tree: &mut [QuantileWindowTreeNode],
-    tree_leafs_starting_index: usize, actual_floor_big_block: usize) {
+fn succ_tree_initial_build(block_data: &[QuantileWindowBlock], succ_tree: &mut [QuantileWindowTreeNode],
+    tree_leafs_starting_index: usize, actual_floor_block: usize) {
     for (index, block) in block_data.iter().enumerate() {
-        let current_block_tracker = block.tracker;
-        let succ_index = if index == actual_floor_big_block {
-            current_block_tracker + 1
-        } else if block.ran_out_right {
-            block.length
-        } else {
-            current_block_tracker
-        };
-
-        let succ_value = if succ_index < block.length {
-            unsafe {
-                *block.data.get_unchecked(succ_index)
-            }
-        } else {
-            SUCC_DUMMY_VALUE
-        };
+        let is_actual_floor_block = index == actual_floor_block;
+        let succ_value = block.get_successor_value(is_actual_floor_block);
 
         let target_index = tree_leafs_starting_index + index;
         unsafe {
@@ -1049,25 +1052,11 @@ fn succ_tree_min_child(succ_tree: &[QuantileWindowTreeNode], position: usize) ->
     best
 }
 
-fn succ_tree_update(target_block: &QuantileWindowBigBlock, target_block_index: usize,
+fn succ_tree_update(target_block: &QuantileWindowBlock, target_block_index: usize,
     succ_tree: &mut [QuantileWindowTreeNode], tree_leafs_starting_index: usize,
-    actual_floor_big_block: usize) {
-    let current_block_tracker = target_block.tracker;
-    let succ_index = if target_block_index == actual_floor_big_block {
-        current_block_tracker + 1
-    } else if target_block.ran_out_right {
-        target_block.length
-    } else {
-        current_block_tracker
-    };
-
-    let succ_value = if succ_index < target_block.length {
-        unsafe {
-            *target_block.data.get_unchecked(succ_index)
-        }
-    } else {
-        SUCC_DUMMY_VALUE
-    };
+    actual_floor_block: usize) {
+    let is_actual_floor_block = target_block_index == actual_floor_block;
+    let succ_value = target_block.get_successor_value(is_actual_floor_block);
 
     let mut current_index = tree_leafs_starting_index + target_block_index;
     let current_node = unsafe {
@@ -1127,56 +1116,9 @@ fn tree_parent_index(position: usize) -> usize {
     (position - 1) / K_ARY
 }
 
-// Update phase
-
-fn update_shift_in(block_data_slice: &mut [OrderedDouble], new_value: OrderedDouble,
-    old_value: OrderedDouble) -> (usize, usize) {
-    let index_old_value = block_data_slice.iter().filter(|&&x| x < old_value).count();
-    let index_new_value = if new_value < old_value {
-        shift_in_backwards(block_data_slice, index_old_value, new_value)
-    } else if new_value > old_value {
-        shift_in_forwards(block_data_slice, index_old_value, new_value)
-    } else {
-        block_data_slice[index_old_value] = new_value;
-        index_old_value
-    };
-
-    (index_old_value, index_new_value)
-}
-
-#[inline(always)]
-fn shift_in_backwards(data: &mut [OrderedDouble], old_value_index: usize, new_value: OrderedDouble) -> usize {
-    let mut index = old_value_index;
-    unsafe {
-        while (index > 0) && (new_value < *data.get_unchecked(index - 1)) {
-            *data.get_unchecked_mut(index) = *data.get_unchecked(index - 1);
-            index -= 1;
-        }
-
-        *data.get_unchecked_mut(index) = new_value;
-    }
-
-    index
-}
-
-#[inline(always)]
-fn shift_in_forwards(data: &mut [OrderedDouble], old_value_index: usize, new_value: OrderedDouble) -> usize {
-    let mut index = old_value_index;
-    unsafe {
-        while (index < (data.len() - 1)) && (new_value > *data.get_unchecked(index + 1)) {
-            *data.get_unchecked_mut(index) = *data.get_unchecked(index + 1);
-            index += 1;
-        }
-
-        *data.get_unchecked_mut(index) = new_value;
-    }
-
-    index
-}
-
 // Testing
 
-fn test_sorted_blocks(block_data: &[QuantileWindowBigBlock]) -> bool {
+fn test_sorted_blocks(block_data: &[QuantileWindowBlock]) -> bool {
     for block in block_data {
         let mut current_value = OrderedDouble::from_f64(-f64::NAN);
         for value in block.data {
