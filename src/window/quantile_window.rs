@@ -41,6 +41,65 @@ struct QuantileWindowBlock {
 
 impl QuantileWindowBlock {
 
+    fn sort(&mut self) {
+        let mut current_slice = 0;
+        while current_slice < SLICES_PER_BLOCK {
+            let slice_start_index = current_slice * SORTING_NETWORK_SIZE;
+            let slice_end_index = slice_start_index + SORTING_NETWORK_SIZE;
+            let block_slice = &mut self.data[slice_start_index..slice_end_index];
+
+            sorting_networks::sorting_network_16(block_slice);
+            current_slice += 1;
+        }
+        self.k_way_merge_slices();
+    }
+
+    fn k_way_merge_slices(&mut self) {
+        let mut temp_block_data = [OrderedDouble::from_f64(0.0); BLOCK_SIZE];
+        temp_block_data.copy_from_slice(&self.data);
+
+        let mut slices_ptr = [0; SLICES_PER_BLOCK];
+        let mut current_slice = 0;
+        while current_slice < SLICES_PER_BLOCK {
+            slices_ptr[current_slice] = current_slice * SORTING_NETWORK_SIZE;
+            current_slice += 1;
+        }
+
+        let mut k = 0;
+        loop {
+            let mut smallest = OrderedDouble::MAX;
+            let mut target_slice = 0;
+            let mut found = false;
+
+            for (index, slice_ptr) in slices_ptr.iter().enumerate() {
+                let max_ptr = (index * SORTING_NETWORK_SIZE) + SORTING_NETWORK_SIZE;
+                if *slice_ptr == max_ptr {
+                    continue;
+                }
+
+                let slice_value = unsafe {
+                    *temp_block_data.get_unchecked(*slice_ptr)
+                };
+
+                if slice_value <= smallest {
+                    smallest = slice_value;
+                    target_slice = index;
+                    found = true;
+                }
+            }
+
+            if !found {
+                break;
+            }
+
+            unsafe {
+                *self.data.get_unchecked_mut(k) = smallest;
+            }
+            slices_ptr[target_slice] += 1;
+            k += 1;
+        }
+    }
+
     #[inline(always)]
     fn get_predeccessor_value(&self) -> OrderedDouble {
         let current_block_tracker = self.tracker;
@@ -174,7 +233,7 @@ impl QuantileWindow {
     }
 
     fn prepare(&mut self) {
-        initial_sort(&mut self.block_data);
+        self.initial_sort();
 
         let searched_rank = self.quantile * ((self.current_size - 1) as f64);
         let floor_rank = searched_rank.floor() as usize;
@@ -246,6 +305,12 @@ impl QuantileWindow {
         self.interpolation = !((searched_rank % 1.0) == 0.0);
 
         self.actual_block = 0;
+    }
+
+    fn initial_sort(&mut self) {
+        for block in &mut self.block_data {
+            block.sort();
+        }
     }
 
     fn test_on_sorted(&self) -> bool {
@@ -673,65 +738,6 @@ fn calculate_needed_blocks(window_size: usize) -> usize {
 
 fn calculate_interpolated_quantile(searched_rank: f64, floor_value: f64, successor_value: f64) -> f64 {
     floor_value + (successor_value - floor_value) * (searched_rank - searched_rank.floor())
-}
-
-// Initial phase
-fn initial_sort(block_data: &mut [QuantileWindowBlock]) {
-    for block in block_data {
-        let mut current_slice = 0;
-        while current_slice < SLICES_PER_BLOCK {
-            let slice_start_index = current_slice * SORTING_NETWORK_SIZE;
-            let slice_end_index = slice_start_index + SORTING_NETWORK_SIZE;
-            let target_slice = &mut block.data[slice_start_index..slice_end_index];
-            sorting_networks::sorting_network_16::<OrderedDouble>(target_slice);
-            current_slice += 1;
-        }
-
-        k_way_merge_tiny_blocks(&mut block.data);
-    }
-}
-
-fn k_way_merge_tiny_blocks(data: &mut [OrderedDouble; BLOCK_SIZE]) {
-    let mut temp_data_vec = [OrderedDouble::from_f64(0.0);
-        BLOCK_SIZE];
-    temp_data_vec.copy_from_slice(data);
-
-    let mut tiny_blocks_ptr = [0; SLICES_PER_BLOCK];
-    let mut index = 0;
-    while index < SLICES_PER_BLOCK {
-        tiny_blocks_ptr[index] = index * SORTING_NETWORK_SIZE;
-        index += 1;
-    }
-
-    let smallest_placeholder = PLACE_HOLDER_VALUE;
-    let mut k = 0;
-    loop {
-        let mut smallest = smallest_placeholder;
-        let mut target_block = 0;
-        let mut found = false;
-
-        for (index, temp_ptr) in tiny_blocks_ptr.iter().enumerate() {
-            let max_ptr = (index * SORTING_NETWORK_SIZE) + SORTING_NETWORK_SIZE;
-            if *temp_ptr == max_ptr {
-                continue;
-            }
-
-            let temp_value = temp_data_vec[*temp_ptr];
-            if temp_value <= smallest {
-                smallest = temp_value;
-                target_block = index;
-                found = true;
-            }
-        }
-
-        if !found {
-            break;
-        }
-
-        data[k] = smallest;
-        tiny_blocks_ptr[target_block] += 1;
-        k += 1;
-    }
 }
 
 fn find_value_by_rank(block_data: &[QuantileWindowBlock], searched_rank: usize) -> QuantileWindowSelectionResult {
