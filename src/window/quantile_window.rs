@@ -1,6 +1,9 @@
 use std::{vec};
 
-use crate::window::utils::{ordered_double::OrderedDouble, ordered_double_slice::OrderedDoubleSlice, sorting_networks};
+use crate::window::utils::{ordered_double::OrderedDouble,
+    ordered_double_slice::OrderedDoubleSlice,
+    sorting_networks,
+    quantile_math};
 
 const SORTING_NETWORK_SIZE: usize = 16;
 const BLOCK_SIZE: usize = 64;
@@ -49,8 +52,10 @@ impl QuantileWindowBlock {
             let block_slice = &mut self.data[slice_start_index..slice_end_index];
 
             sorting_networks::sorting_network_16(block_slice);
+
             current_slice += 1;
         }
+
         self.k_way_merge_slices();
     }
 
@@ -616,28 +621,26 @@ impl QuantileWindow {
         self.actual_floor_value = new_floor_data.value;
     }
 
-    fn result_quantile(&mut self, result_vec: &mut Vec<f64>) {
+    fn result_quantile(&mut self) -> f64 {
         let floor_value: f64 = self.actual_floor_value.to_f64();
         if !self.interpolation {
-            result_vec.push(floor_value);
+            return floor_value;
         } else {
             let successor_value = unsafe {
                 self.succ_tree.get_unchecked(0).value
             };
             let successor_value = successor_value.to_f64();
 
-            let interpolated_result = calculate_interpolated_quantile(self.searched_rank,
+            return quantile_math::calculate_interpolated_quantile(self.searched_rank,
                 floor_value,
                 successor_value);
-
-            result_vec.push(interpolated_result);
         }
     }
 
-    fn adjust_and_result_quantile(&mut self, result_vec: &mut Vec<f64>) {
+    fn adjust_and_result_quantile(&mut self) -> f64 {
         self.global_right_shift();
         self.global_left_shift();
-        self.result_quantile(result_vec);
+        self.result_quantile()
     }
 
     fn global_right_shift(&mut self) {
@@ -734,10 +737,6 @@ impl QuantileWindow {
 // Utils
 fn calculate_needed_blocks(window_size: usize) -> usize {
     window_size.div_ceil(BLOCK_SIZE)
-}
-
-fn calculate_interpolated_quantile(searched_rank: f64, floor_value: f64, successor_value: f64) -> f64 {
-    floor_value + (successor_value - floor_value) * (searched_rank - searched_rank.floor())
 }
 
 fn find_value_by_rank(block_data: &[QuantileWindowBlock], searched_rank: usize) -> QuantileWindowSelectionResult {
@@ -1152,13 +1151,17 @@ pub fn rolling_window(input_array: &[f64], window_size: usize, quantile: f64) ->
     }
 
     window.prepare();
-    window.result_quantile(&mut result_vec);
+
+    let first_result = window.result_quantile();
+    result_vec.push(first_result);
 
     let input_slice = &input_array[window_size..];
     for input in input_slice {
         let input_value = OrderedDouble::from_f64(*input);
         window.update_window(input_value);
-        window.adjust_and_result_quantile(&mut result_vec);
+
+        let result = window.adjust_and_result_quantile();
+        result_vec.push(result);
     }
 
     result_vec
