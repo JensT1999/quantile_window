@@ -13,6 +13,7 @@ const K_ARY: usize = 8;
 const PLACE_HOLDER_VALUE: OrderedDouble = OrderedDouble::MAX;
 const PRED_DUMMY_VALUE: OrderedDouble = OrderedDouble::MIN;
 const SUCC_DUMMY_VALUE: OrderedDouble = OrderedDouble::MAX;
+const TREE_INVALID_BLOCK_IDX: usize = usize::MAX;
 
 struct QuantileWindow {
     current_size: usize,
@@ -122,6 +123,12 @@ impl QuantileWindowBlock {
     }
 
     #[inline(always)]
+    fn is_predeccessor_out_of_range(&self) -> bool {
+        let current_block_tracker = self.tracker;
+        current_block_tracker == 0
+    }
+
+    #[inline(always)]
     fn get_successor_value(&self, is_actual_floor_block: bool) -> OrderedDouble {
         let current_block_tracker = self.tracker;
         let succ_index = if is_actual_floor_block {
@@ -139,6 +146,24 @@ impl QuantileWindowBlock {
         } else {
             SUCC_DUMMY_VALUE
         }
+    }
+
+    #[inline(always)]
+    fn is_successor_out_of_range(&self, is_actual_floor_block: bool) -> bool {
+        let current_block_tracker = self.tracker;
+        let succ_index = if is_actual_floor_block {
+            current_block_tracker + 1
+        } else if self.ran_out_right {
+            self.length
+        } else {
+            current_block_tracker
+        };
+
+        if succ_index < self.length {
+            return false;
+        }
+
+        true
     }
 }
 
@@ -199,11 +224,11 @@ impl QuantileWindow {
             trees_leafs_starting_index: needed_trees_metadata.0,
             pred_tree: vec![QuantileWindowTreeNode {
                 value: PRED_DUMMY_VALUE,
-                block_index: 0,
+                block_index: TREE_INVALID_BLOCK_IDX,
             }; needed_trees_metadata.1],
             succ_tree: vec![QuantileWindowTreeNode {
                 value: SUCC_DUMMY_VALUE,
-                block_index: 0,
+                block_index: TREE_INVALID_BLOCK_IDX,
             }; needed_trees_metadata.1],
         };
 
@@ -271,9 +296,10 @@ impl QuantileWindow {
                 self.block_data.get_unchecked_mut(old_floor_big_block_index)
             };
 
-            old_floor_big_block.tracker += 1;
-            if old_floor_big_block.tracker == old_floor_big_block.length {
+            if (old_floor_big_block.tracker + 1) == old_floor_big_block.length {
                 old_floor_big_block.ran_out_right = true;
+            } else {
+                old_floor_big_block.tracker += 1;
             }
 
             pred_tree_update(old_floor_big_block,
@@ -897,24 +923,27 @@ fn tree_calculate_metadata(input_length: usize) -> (usize, usize) {
 fn pred_tree_initial_build(block_data: &[QuantileWindowBlock], pred_tree: &mut [QuantileWindowTreeNode],
     tree_leafs_starting_index: usize) {
     for (index, block) in block_data.iter().enumerate() {
+        let block_got_invalid = block.is_predeccessor_out_of_range();
         let pred_value = block.get_predeccessor_value();
+        let tree_block_index = if block_got_invalid {
+            TREE_INVALID_BLOCK_IDX
+        } else {
+            index
+        };
+
         let target_index = tree_leafs_starting_index + index;
         unsafe {
             let current_node = pred_tree.get_unchecked_mut(target_index);
             current_node.value = pred_value;
-            current_node.block_index = index;
+            current_node.block_index = tree_block_index;
         }
     }
 
     let mut current_index = tree_leafs_starting_index - 1;
     loop {
-        let max_child_index = pred_tree_max_child(pred_tree, current_index);
-        let max_node = unsafe {
-            pred_tree.get_unchecked(max_child_index)
-        };
-
+        let max_node = pred_tree_real_max_child(pred_tree, current_index);
         unsafe {
-            *pred_tree.get_unchecked_mut(current_index) = *max_node;
+            *pred_tree.get_unchecked_mut(current_index) = max_node;
         }
 
         if current_index == 0 {
@@ -922,6 +951,22 @@ fn pred_tree_initial_build(block_data: &[QuantileWindowBlock], pred_tree: &mut [
         }
 
         current_index -= 1;
+    }
+}
+
+fn pred_tree_real_max_child(pred_tree: &[QuantileWindowTreeNode], position: usize) -> QuantileWindowTreeNode {
+    let max_child_index = pred_tree_max_child(pred_tree, position);
+    let max_node = unsafe {
+        *pred_tree.get_unchecked(max_child_index)
+    };
+
+    if max_node.block_index != TREE_INVALID_BLOCK_IDX {
+        return max_node;
+    }
+
+    let result_child_index = tree_select_node(pred_tree, position);
+    unsafe {
+        *pred_tree.get_unchecked(result_child_index)
     }
 }
 
@@ -951,39 +996,44 @@ fn pred_tree_max_child(pred_tree: &[QuantileWindowTreeNode], position: usize) ->
 
 fn pred_tree_update(target_block: &QuantileWindowBlock, target_block_index: usize,
     pred_tree: &mut [QuantileWindowTreeNode], tree_leafs_starting_index: usize) {
+    let target_node_index = tree_leafs_starting_index + target_block_index;
+    let block_got_invalid = target_block.is_predeccessor_out_of_range();
     let pred_value = target_block.get_predeccessor_value();
-    let mut current_index = tree_leafs_starting_index + target_block_index;
+    let tree_block_index = if block_got_invalid {
+        TREE_INVALID_BLOCK_IDX
+    } else {
+        target_block_index
+    };
+
     let current_node = unsafe {
-        let current_node = pred_tree.get_unchecked_mut(current_index);
+        let current_node = pred_tree.get_unchecked_mut(target_node_index);
         current_node.value = pred_value;
+        current_node.block_index = tree_block_index;
         *current_node
     };
 
+    let mut current_index= target_node_index;
     loop {
         let parent_index = tree_parent_index(current_index);
         let parent_node = unsafe {
             *pred_tree.get_unchecked(parent_index)
         };
 
-        if current_node.block_index == parent_node.block_index {
+        if parent_node.block_index == target_block_index {
             if current_node.value > parent_node.value {
                 unsafe {
                     let parent_node = pred_tree.get_unchecked_mut(parent_index);
                     *parent_node = current_node;
                 }
             } else {
-                let max_child_index = pred_tree_max_child(pred_tree, parent_index);
-                let max_node = unsafe {
-                    *pred_tree.get_unchecked(max_child_index)
-                };
-
+                let max_node = pred_tree_real_max_child(pred_tree, parent_index);
                 unsafe {
                     let parent_node = pred_tree.get_unchecked_mut(parent_index);
                     *parent_node = max_node;
                 }
             }
         } else {
-            if current_node.value > parent_node.value {
+            if parent_node.block_index == TREE_INVALID_BLOCK_IDX || current_node.value > parent_node.value {
                 unsafe {
                     let parent_node = pred_tree.get_unchecked_mut(parent_index);
                     *parent_node = current_node;
@@ -1004,25 +1054,27 @@ fn succ_tree_initial_build(block_data: &[QuantileWindowBlock], succ_tree: &mut [
     tree_leafs_starting_index: usize, actual_floor_block: usize) {
     for (index, block) in block_data.iter().enumerate() {
         let is_actual_floor_block = index == actual_floor_block;
+        let block_got_invalid = block.is_successor_out_of_range(is_actual_floor_block);
         let succ_value = block.get_successor_value(is_actual_floor_block);
+        let tree_block_index = if block_got_invalid {
+            TREE_INVALID_BLOCK_IDX
+        } else {
+            index
+        };
 
         let target_index = tree_leafs_starting_index + index;
         unsafe {
             let current_node = succ_tree.get_unchecked_mut(target_index);
             current_node.value = succ_value;
-            current_node.block_index = index;
+            current_node.block_index = tree_block_index;
         }
     }
 
     let mut current_index = tree_leafs_starting_index - 1;
     loop {
-        let min_child_index = succ_tree_min_child(succ_tree, current_index);
-        let min_node = unsafe {
-            succ_tree.get_unchecked(min_child_index)
-        };
-
+        let min_node = succ_tree_get_real_min_child(succ_tree, current_index);
         unsafe {
-            *succ_tree.get_unchecked_mut(current_index) = *min_node;
+            *succ_tree.get_unchecked_mut(current_index) = min_node;
         }
 
         if current_index == 0 {
@@ -1030,6 +1082,22 @@ fn succ_tree_initial_build(block_data: &[QuantileWindowBlock], succ_tree: &mut [
         }
 
         current_index -= 1;
+    }
+}
+
+fn succ_tree_get_real_min_child(succ_tree: &[QuantileWindowTreeNode], position: usize) -> QuantileWindowTreeNode {
+    let min_child_index = succ_tree_min_child(succ_tree, position);
+    let min_node = unsafe {
+        *succ_tree.get_unchecked(min_child_index)
+    };
+
+    if min_node.block_index != TREE_INVALID_BLOCK_IDX {
+        return min_node;
+    }
+
+    let min_child_index = tree_select_node(succ_tree, position);
+    unsafe {
+        *succ_tree.get_unchecked(min_child_index)
     }
 }
 
@@ -1060,41 +1128,45 @@ fn succ_tree_min_child(succ_tree: &[QuantileWindowTreeNode], position: usize) ->
 fn succ_tree_update(target_block: &QuantileWindowBlock, target_block_index: usize,
     succ_tree: &mut [QuantileWindowTreeNode], tree_leafs_starting_index: usize,
     actual_floor_block: usize) {
+    let target_node_index = tree_leafs_starting_index + target_block_index;
     let is_actual_floor_block = target_block_index == actual_floor_block;
+    let block_got_invalid = target_block.is_successor_out_of_range(is_actual_floor_block);
     let succ_value = target_block.get_successor_value(is_actual_floor_block);
+    let tree_block_index = if block_got_invalid {
+        TREE_INVALID_BLOCK_IDX
+    } else {
+        target_block_index
+    };
 
-    let mut current_index = tree_leafs_starting_index + target_block_index;
     let current_node = unsafe {
-        let current_node = succ_tree.get_unchecked_mut(current_index);
+        let current_node = succ_tree.get_unchecked_mut(target_node_index);
         current_node.value = succ_value;
+        current_node.block_index = tree_block_index;
         *current_node
     };
 
+    let mut current_index = target_node_index;
     loop {
         let parent_index = tree_parent_index(current_index);
         let parent_node = unsafe {
             succ_tree.get_unchecked_mut(parent_index)
         };
 
-        if current_node.block_index == parent_node.block_index {
+        if parent_node.block_index == target_block_index {
             if current_node.value < parent_node.value {
                 unsafe {
                     let parent_node = succ_tree.get_unchecked_mut(parent_index);
                     *parent_node = current_node;
                 }
             } else {
-                let min_child_index = succ_tree_min_child(succ_tree, parent_index);
-                let min_node = unsafe {
-                    *succ_tree.get_unchecked(min_child_index)
-                };
-
+                let min_node = succ_tree_get_real_min_child(succ_tree, parent_index);
                 unsafe {
                     let parent_node = succ_tree.get_unchecked_mut(parent_index);
                     *parent_node = min_node;
                 }
             }
         } else {
-            if current_node.value < parent_node.value {
+            if parent_node.block_index == TREE_INVALID_BLOCK_IDX || current_node.value < parent_node.value {
                 unsafe {
                     let parent_node = succ_tree.get_unchecked_mut(parent_index);
                     *parent_node = current_node;
@@ -1109,6 +1181,24 @@ fn succ_tree_update(target_block: &QuantileWindowBlock, target_block_index: usiz
             break;
         }
     }
+}
+
+fn tree_select_node(tree: &[QuantileWindowTreeNode], position: usize) -> usize {
+    let first_child = tree_child_index(position, 1);
+    let mut result = first_child;
+
+    for child in 1..K_ARY {
+        let target_child_index = first_child + child;
+        let child_node = unsafe {
+            *tree.get_unchecked(target_child_index)
+        };
+
+        if child_node.block_index != TREE_INVALID_BLOCK_IDX {
+            result = target_child_index;
+        }
+    }
+
+    result
 }
 
 #[inline(always)]
