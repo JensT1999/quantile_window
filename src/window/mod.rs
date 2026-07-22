@@ -7,6 +7,7 @@ const QUANTILE_EPSILON: f64 = 1e-9;
 
 #[derive(Debug)]
 pub enum WindowError {
+    InputArrayIsEmptyError,
     SizingError,
     InvalidQuantileError,
 }
@@ -15,6 +16,8 @@ impl Display for WindowError {
 
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            WindowError::InputArrayIsEmptyError => write!(f, "InputArrayIsEmptyError: It seems the
+                input array is empty"),
             WindowError::SizingError => write!(f, "SizingError: It seems you entered a wrong size"),
             WindowError::InvalidQuantileError => write!(f, "InvalidQuantileError:
                 It seems you entered an invalid quantile"),
@@ -26,7 +29,11 @@ impl std::error::Error for WindowError {}
 
 pub fn rolling_quantile_window(input_array: &[f64], window_size: usize, quantile: f64) ->
     Result<Vec<f64>, WindowError> {
-    if input_array.len() == 0 || window_size == 0 {
+    if input_array.is_empty() {
+        return Err(WindowError::InputArrayIsEmptyError);
+    }
+
+    if window_size == 0 || window_size > input_array.len() {
         return Err(WindowError::SizingError);
     }
 
