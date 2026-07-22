@@ -1,7 +1,7 @@
-pub fn sorting_network_16<T>(data: &mut [T]) where
-T: Ord +
-Copy
-{
+pub fn sorting_network_16<T>(data: &mut [T])
+where
+    T: Ord +
+    Copy {
     sorting_network_cas(data, 0, 15);
     sorting_network_cas(data, 1, 14);
     sorting_network_cas(data, 2, 13);
@@ -74,10 +74,10 @@ Copy
 }
 
 #[inline(always)]
-fn sorting_network_cas<T>(data: &mut [T], index1: usize, index2: usize) where
-T: Ord +
-Copy
-{
+fn sorting_network_cas<T>(data: &mut [T], index1: usize, index2: usize)
+where
+    T: Ord +
+    Copy {
     let data_tup = unsafe {
         (*data.get_unchecked(index1), *data.get_unchecked(index2))
     };
