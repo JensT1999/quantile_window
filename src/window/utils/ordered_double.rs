@@ -1,10 +1,25 @@
-use std::cmp::Ordering;
+use std::fmt;
 
 use crate::window::utils::type_conversion;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(transparent)]
 pub struct OrderedDouble {
     data: i64,
+}
+
+impl fmt::Debug for OrderedDouble {
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "OrderedDouble value: {}", self.to_f64())
+    }
+}
+
+impl Default for OrderedDouble {
+
+    fn default() -> Self {
+        OrderedDouble::from_f64(0.0)
+    }
 }
 
 impl OrderedDouble {
@@ -23,22 +38,72 @@ impl OrderedDouble {
     }
 }
 
-impl PartialEq for OrderedDouble {
-    fn eq(&self, other: &Self) -> bool {
-        self.data == other.data
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_ordered_double_eq() {
+        let value_a = OrderedDouble::from_f64(5.0);
+        let value_b = OrderedDouble::from_f64(5.0);
+
+        assert!(value_a == value_b);
     }
-}
 
-impl Eq for OrderedDouble {}
+    #[test]
+    fn test_ordered_double_ord_a() {
+        let value_a = OrderedDouble::from_f64(5.0);
+        let value_b = OrderedDouble::from_f64(6.0);
 
-impl PartialOrd for OrderedDouble {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.data.cmp(&other.data))
+        assert!(value_a < value_b);
+        assert!(value_b > value_a);
     }
-}
 
-impl Ord for OrderedDouble {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.data.cmp(&other.data)
+    #[test]
+    fn test_ordered_double_ord_b() {
+        let mut values = [3.0, 2.0, 1.0, 9.0, 7.0]
+            .into_iter()
+            .map(|x| OrderedDouble::from_f64(x))
+            .collect::<Vec<OrderedDouble>>();
+
+        assert!(!values.is_sorted());
+        values.sort();
+        assert!(values.is_sorted());
+    }
+
+    #[test]
+    fn test_ordered_double_nan() {
+        let mut values = [3.0, 2.0, -f64::NAN, f64::NAN, 7.0]
+            .into_iter()
+            .map(|x| OrderedDouble::from_f64(x))
+            .collect::<Vec<OrderedDouble>>();
+
+        assert!(!values.is_sorted());
+        values.sort();
+        assert!(values.is_sorted());
+
+        assert!(values[0] == OrderedDouble::MIN);
+        assert!(values[4] == OrderedDouble::MAX);
+    }
+
+    #[test]
+    fn test_ordered_double_sorting_order() {
+        let mut values = [3.0, f64::INFINITY, 0.0, -0.0, -3.0, -f64::INFINITY, f64::NAN, -f64::NAN]
+            .into_iter()
+            .map(|x| OrderedDouble::from_f64(x))
+            .collect::<Vec<OrderedDouble>>();
+
+        assert!(!values.is_sorted());
+        values.sort();
+        assert!(values.is_sorted());
+
+        assert!(values[0] == OrderedDouble::MIN);
+        assert!(values[1] == OrderedDouble::from_f64(-f64::INFINITY));
+        assert!(values[2] == OrderedDouble::from_f64(-3.0));
+        assert!(values[3] == OrderedDouble::from_f64(-0.0));
+        assert!(values[4] == OrderedDouble::from_f64(0.0));
+        assert!(values[5] == OrderedDouble::from_f64(3.0));
+        assert!(values[6] == OrderedDouble::from_f64(f64::INFINITY));
+        assert!(values[7] == OrderedDouble::MAX);
     }
 }
