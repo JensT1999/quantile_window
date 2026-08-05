@@ -17,6 +17,7 @@ impl fmt::Debug for OrderedDouble {
 
 impl Default for OrderedDouble {
 
+    #[inline(always)]
     fn default() -> Self {
         OrderedDouble::from_f64(0.0)
     }

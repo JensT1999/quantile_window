@@ -34,6 +34,7 @@ struct QuantileWindow {
     succ_tree: QuantileWindowTree<QuantileWindowSuccessorTree>,
 }
 
+#[derive(Clone)]
 struct QuantileWindowBlock {
     data: [OrderedDouble; BLOCK_SIZE],
     length: usize,
@@ -53,7 +54,6 @@ impl QuantileWindowBlock {
             let block_slice = &mut self.data[slice_start_index..slice_end_index];
 
             sorting_networks::sorting_network_16(block_slice);
-
             current_slice += 1;
         }
 
@@ -65,11 +65,12 @@ impl QuantileWindowBlock {
         temp_block_data.copy_from_slice(&self.data);
 
         let mut slices_ptr = [0; SLICES_PER_BLOCK];
-        let mut current_slice = 0;
-        while current_slice < SLICES_PER_BLOCK {
-            slices_ptr[current_slice] = current_slice * SORTING_NETWORK_SIZE;
-            current_slice += 1;
-        }
+        slices_ptr
+            .iter_mut()
+            .enumerate()
+            .for_each(|item| {
+                *item.1 = item.0 * SORTING_NETWORK_SIZE;
+            });
 
         let mut k = 0;
         loop {
@@ -219,41 +220,34 @@ impl QuantileWindow {
         let needed_trees_metadata = quantilewindow_tree_utils::
             tree_calculate_metadata(needed_blocks);
 
-        let mut result_window = QuantileWindow {
+        let result_window = QuantileWindow {
             current_size: 0,
             quantile,
             searched_rank: 0.0,
             global_floor_rank: 0,
             actual_floor_rank: 0,
-            actual_floor_value: OrderedDouble::from_f64(0.0),
+            actual_floor_value: OrderedDouble::default(),
             actual_floor_block_index: 0,
             interpolation: false,
             actual_block: 0,
-            block_data: Vec::with_capacity(needed_blocks),
-            queue_data: vec![OrderedDouble::from_f64(0.0); needed_queue_size],
-            pred_tree: QuantileWindowTree::<QuantileWindowPredeccessorTree>::new(needed_trees_metadata),
-            succ_tree: QuantileWindowTree::<QuantileWindowSuccessorTree>::new(needed_trees_metadata),
-        };
-
-        let mut current_block = 0;
-        while current_block < needed_blocks {
-            result_window.block_data.push(QuantileWindowBlock {
+            block_data: vec![QuantileWindowBlock {
                 data: [PLACE_HOLDER_VALUE; BLOCK_SIZE],
                 length: 0,
                 update_index: 0,
                 tracker: 0,
                 actual_floor_block: false,
                 ran_out_right: false
-            });
-            current_block += 1;
-        }
+            }; needed_blocks],
+            queue_data: vec![OrderedDouble::default(); needed_queue_size],
+            pred_tree: QuantileWindowTree::<QuantileWindowPredeccessorTree>::new(needed_trees_metadata),
+            succ_tree: QuantileWindowTree::<QuantileWindowSuccessorTree>::new(needed_trees_metadata),
+        };
 
         result_window
     }
 
     fn add(&mut self, value: OrderedDouble) {
-        let current_block =
-        if self.block_data[self.actual_block].length == BLOCK_SIZE {
+        let current_block = if self.block_data[self.actual_block].length == BLOCK_SIZE {
             self.actual_block += 1;
             &mut self.block_data[self.actual_block]
         } else {
@@ -301,9 +295,9 @@ impl QuantileWindow {
     }
 
     fn initial_sort(&mut self) {
-        for block in &mut self.block_data {
-            block.sort();
-        }
+        self.block_data
+            .iter_mut()
+            .for_each(|block| block.sort());
     }
 
     fn find_value_by_rank(&self, searched_rank: usize) -> QuantileWindowSelectionResult {
@@ -543,13 +537,9 @@ impl QuantileWindow {
         let block_slice = &mut actual_block.data[0..actual_block.length];
         let old_value_index = block_slice.iter().filter(|&&x| x < old_value).count();
         let new_value_index = if new_value > old_value {
-            unsafe {
-                quantilewindow_utils::shift_in_forwards(block_slice, old_value_index, new_value)
-            }
+            quantilewindow_utils::shift_in_forwards(block_slice, old_value_index, new_value)
         } else if new_value < old_value {
-            unsafe {
-                quantilewindow_utils::shift_in_backwards(block_slice, old_value_index, new_value)
-            }
+            quantilewindow_utils::shift_in_backwards(block_slice, old_value_index, new_value)
         } else {
             block_slice[old_value_index] = new_value;
             old_value_index
@@ -586,8 +576,8 @@ impl QuantileWindow {
                 update_succ_tree = true;
                 update_tracker = false;
             } else {
-                if deleted_index == (actual_block.length - 1) ||
-                    new_index == (actual_block.length - 1) {
+                if deleted_index == (actual_block_len - 1) ||
+                    new_index == (actual_block_len - 1) {
                     update_pred_tree = true;
                     update_tracker = false;
                 } else {
@@ -786,8 +776,7 @@ mod quantilewindow_utils {
     }
 
     #[inline(always)]
-    pub unsafe fn shift_in_backwards(data: &mut [OrderedDouble], old_value_index: usize,
-        new_value: OrderedDouble) -> usize {
+    pub fn shift_in_backwards(data: &mut [OrderedDouble], old_value_index: usize, new_value: OrderedDouble) -> usize {
         debug_assert!(!data.is_empty());
         debug_assert!(old_value_index < data.len());
 
@@ -804,8 +793,7 @@ mod quantilewindow_utils {
     }
 
     #[inline(always)]
-    pub unsafe fn shift_in_forwards(data: &mut [OrderedDouble], old_value_index: usize,
-        new_value: OrderedDouble) -> usize {
+    pub fn shift_in_forwards(data: &mut [OrderedDouble], old_value_index: usize, new_value: OrderedDouble) -> usize {
         debug_assert!(!data.is_empty());
         debug_assert!(old_value_index < data.len());
 
@@ -822,6 +810,7 @@ mod quantilewindow_utils {
     }
 }
 // Tree
+
 trait QuantileWindowTreeFunctions<T>
 where
     T: QuantileWindowTreeType {
@@ -965,11 +954,9 @@ where
             };
 
             let target_index = self.trees_leaf_starting_index + index;
-            unsafe {
-                let current_node = self.data.get_unchecked_mut(target_index);
-                current_node.value = neighbor_info.1;
-                current_node.block_index = tree_block_index;
-            }
+            let current_node = &mut self.data[target_index];
+            current_node.value = neighbor_info.1;
+            current_node.block_index = tree_block_index;
         }
 
         let mut current_index = self.trees_leaf_starting_index - 1;
@@ -1007,14 +994,13 @@ where
         let first_child = quantilewindow_tree_utils::tree_child_index(position, 1);
 
         let mut best = first_child;
-        let mut current_node = unsafe {
-            self.data.get_unchecked(best)
+        let mut best_value = unsafe {
+            self.data.get_unchecked(best).value
         };
-        let mut best_value = current_node.value;
 
         for child in 1..K_ARY {
             let current_child_index = first_child + child;
-            current_node = unsafe {
+            let current_node = unsafe {
                 self.data.get_unchecked(current_child_index)
             };
 
@@ -1052,24 +1038,17 @@ where
 
             if parent_node.block_index == target_block_index {
                 if T::is_better(current_node.value, parent_node.value) {
-                    unsafe {
-                        let parent_node = self.data.get_unchecked_mut(parent_index);
-                        *parent_node = current_node;
-                    }
+                    *parent_node = current_node;
                 } else {
                     let target_node = self.select_real_following_child(parent_index);
                     unsafe {
-                        let parent_node = self.data.get_unchecked_mut(parent_index);
-                        *parent_node = target_node;
+                        *self.data.get_unchecked_mut(parent_index) = target_node;
                     }
                 }
             } else {
                 if parent_node.block_index == TREE_INVALID_BLOCK_IDX ||
                     T::is_better(current_node.value, parent_node.value) {
-                    unsafe {
-                        let parent_node = self.data.get_unchecked_mut(parent_index);
-                        *parent_node = current_node;
-                    }
+                    *parent_node = current_node;
                 } else {
                     break;
                 }
@@ -1091,27 +1070,30 @@ where
 pub fn rolling_window(input_array: &[f64], window_size: usize, quantile: f64) -> Vec<f64> {
     let result_vec_len = (input_array.len() - window_size) + 1;
     let mut result_vec = Vec::with_capacity(result_vec_len);
-    let mut window = QuantileWindow::new(window_size, quantile);
 
     let input_slice = &input_array[0..window_size];
-    for value in input_slice {
-        let input_value = OrderedDouble::from_f64(*value);
-        window.add(input_value);
-    }
+    let mut window = input_slice
+        .iter()
+        .fold(QuantileWindow::new(window_size, quantile),
+            |mut window, value| {
+                window.add(OrderedDouble::from_f64(*value));
+                window
+            });
 
     window.prepare();
-
     let first_result = window.result_quantile();
     result_vec.push(first_result);
 
     let input_slice = &input_array[window_size..];
-    for input in input_slice {
-        let input_value = OrderedDouble::from_f64(*input);
-        window.update_window(input_value);
+    input_slice
+        .iter()
+        .for_each(|value| {
+            let input_value = OrderedDouble::from_f64(*value);
+            window.update_window(input_value);
 
-        let result = window.adjust_and_result_quantile();
-        result_vec.push(result);
-    }
+            let result = window.adjust_and_result_quantile();
+            result_vec.push(result);
+        });
 
     result_vec
 }
@@ -1130,7 +1112,7 @@ mod tests {
         let input_value = 1.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        let insert_index = unsafe {
+        let insert_index = {
             quantilewindow_utils::shift_in_backwards(&mut test_input, 4, test_value)
         };
 
@@ -1149,7 +1131,7 @@ mod tests {
         let input_value = 3.5;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        let insert_index = unsafe {
+        let insert_index = {
             quantilewindow_utils::shift_in_backwards(&mut test_input, 4, test_value)
         };
 
@@ -1168,7 +1150,7 @@ mod tests {
         let input_value = 7.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        let insert_index = unsafe {
+        let insert_index = {
             quantilewindow_utils::shift_in_backwards(&mut test_input, 4, test_value)
         };
 
@@ -1187,7 +1169,7 @@ mod tests {
         let input_value = 7.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        let insert_index = unsafe {
+        let insert_index = {
             quantilewindow_utils::shift_in_forwards(&mut test_input, 0, test_value)
         };
 
@@ -1206,7 +1188,7 @@ mod tests {
         let input_value = 3.5;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        let insert_index = unsafe {
+        let insert_index = {
             quantilewindow_utils::shift_in_forwards(&mut test_input, 0, test_value)
         };
 
@@ -1225,7 +1207,7 @@ mod tests {
         let input_value = 1.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        let insert_index = unsafe {
+        let insert_index = {
             quantilewindow_utils::shift_in_forwards(&mut test_input, 0, test_value)
         };
 
@@ -1244,9 +1226,7 @@ mod tests {
         let input_value = 1.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        unsafe {
-            quantilewindow_utils::shift_in_backwards(&mut input_data, 0, test_value);
-        };
+        quantilewindow_utils::shift_in_backwards(&mut input_data, 0, test_value);
     }
 
     #[test]
@@ -1257,9 +1237,7 @@ mod tests {
         let input_value = 1.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        unsafe {
-            quantilewindow_utils::shift_in_forwards(&mut input_data, 0, test_value);
-        };
+        quantilewindow_utils::shift_in_forwards(&mut input_data, 0, test_value);
     }
 
     #[test]
@@ -1270,9 +1248,7 @@ mod tests {
         let input_value = 1.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        unsafe {
-            quantilewindow_utils::shift_in_backwards(&mut test_input, 5, test_value);
-        }
+        quantilewindow_utils::shift_in_backwards(&mut test_input, 5, test_value);
     }
 
     #[test]
@@ -1284,9 +1260,7 @@ mod tests {
         let input_value = 7.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        unsafe {
-            quantilewindow_utils::shift_in_forwards(&mut test_input, 5, test_value);
-        }
+        quantilewindow_utils::shift_in_forwards(&mut test_input, 5, test_value);
     }
 
     #[track_caller]
@@ -1493,7 +1467,9 @@ mod tests {
             left_side.iter().max_by(|x, y| x.total_cmp(y));
         let result_predeccessor_value = test_window.pred_tree.get_root().value;
         match expected_predeccessor_value {
-            Some(value) => assert!(result_predeccessor_value.to_f64() == *value),
+            Some(value) => {
+                assert_eq!(result_predeccessor_value, OrderedDouble::from_f64(*value))
+            },
             None => {
                 assert!(result_predeccessor_value == PRED_DUMMY_VALUE);
                 let predeccessor_block_index = test_window.pred_tree.get_root().block_index;
@@ -1505,7 +1481,9 @@ mod tests {
             right_side.iter().min_by(|x, y| x.total_cmp(y));
         let result_successor_value = test_window.succ_tree.get_root().value;
         match expected_successor_value {
-            Some(value) => assert!(result_successor_value.to_f64() == *value),
+            Some(value) => {
+                assert_eq!(result_successor_value, OrderedDouble::from_f64(*value));
+            },
             None => {
                 assert!(result_successor_value == PRED_DUMMY_VALUE);
                 let successor_block_index = test_window.succ_tree.get_root().block_index;
@@ -1526,14 +1504,9 @@ mod tests {
         let max_block_value = floor_value_block.data[floor_value_block.length - 1];
         assert!(min_block_value <= result_floor_value);
         assert!(max_block_value >= result_floor_value);
-        check_if_floor_value_is_in_block(floor_value_block, result_floor_value);
+        assert!(floor_value_block.data[0..floor_value_block.length].contains(&result_floor_value));
 
         let expected_interpolation = !((expected_searched_rank % 1.0) == 0.0);
         assert!(test_window.interpolation == expected_interpolation);
-    }
-
-    #[track_caller]
-    fn check_if_floor_value_is_in_block(target_block: &QuantileWindowBlock, floor_value: OrderedDouble) {
-        assert!(target_block.data[0..target_block.length].contains(&floor_value));
     }
 }
