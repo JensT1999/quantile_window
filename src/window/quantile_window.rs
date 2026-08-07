@@ -1,3 +1,44 @@
+//! Internal implementation of the rolling quantile window.
+//!
+//! The public API consists solely of [`rolling_window`].
+//! Everything else in this file is just an implementation detail.
+//!
+//! # Implementation Overview
+//!
+//! The internal data structures are fully determined by the `window_size` passed
+//! to [`rolling_window`]. This includes the number of blocks, the queue length,
+//! and the size of the tournament trees. Everything is preallocated - No dynamic
+//! allocations occur during the execution of [`rolling_window`].
+//!
+//! The [`rolling_window`] computation consists of two phases:
+//!   1. The initial fill phase
+//!   2. The update phase
+//!
+//! The implementation maintains several invariants:
+//!
+//! 1. The number of elements stored in each [`QuantileWindowBlock`] is immutable.
+//! 2. All data buffers of [`QuantileWindowBlock`] instances are sorted and remain
+//!    sorted during the complete computation.
+//! 3. Every [`QuantileWindowBlock`] contains a tracker that points to the local
+//!    floor position of the block with respect to the global `floor_value`.
+//! 4. A tracker can move beyond the right boundary of its block if all values
+//!    contained in the block are smaller than the global `floor_value`. This
+//!    state is called `ran_out_right`.
+//! 5. A tracker never points to memory outside the allocated block buffer.
+//!    Out-of-range tracker positions are represented by sentinel states.
+//! 6. Each block contributes a successor candidate to the global successor tree.
+//!    For every block, this candidate is the value at the block's tracker position.
+//!    The only exception is the block containing the current global `floor_value`,
+//!    where the candidate is taken from the position immediately after the tracker
+//!    (`tracker + 1`).
+//! 7. Each block contributes a predecessor candidate to the global predecessor
+//!    tree. This candidate always corresponds to the value at the position
+//!    immediately before the block's tracker (`tracker - 1`).
+//! 8. The global successor tree maintains the minimum of all successor values
+//!    provided by the individual blocks.
+//! 9. The global predecessor tree maintains the maximum of all predecessor values
+//!    provided by the individual blocks.
+
 use std::{marker::PhantomData, vec};
 
 use crate::window::utils::{
@@ -121,6 +162,15 @@ impl QuantileWindowBlock {
         }
     }
 
+    // SAFETY: First of all the predeccessor marks the value of `current_block_tracker` - 1.
+    // So there could be two potential cases where the tracker runs out of the underlying data buffer:
+    // 1. `current_block_tracker` is equal to zero. In this case `PRED_DUMMY_VALUE` will be returned
+    // and no access on the underlying data buffer occurs.
+    // 2. If the block is `ran_out_right`: `self.length` is guaranteed to be >= 1.
+    // After the initial fill of the window the length of the blocks is immutable. The number of elements
+    // in the block is completely deterministic. Even if the block is in `ran_out_right` state there will
+    // be always one element minimum. Otherwise the block wont even exist, because in the construction of the
+    // window the needed blocks are calculated depending on the deterministic size of the window.
     #[inline(always)]
     fn get_predeccessor_value(&self) -> OrderedDouble {
         let current_block_tracker = self.tracker;
@@ -143,6 +193,22 @@ impl QuantileWindowBlock {
         current_block_tracker == 0
     }
 
+    // SAFETY: First of all the successor marks the value of `current_block_tracker`. If the focused block
+    // is equal to the global floor block (e.g. the block that contains the actual floor value that is
+    // being tracker) the successor marks the value of `current_block_tracker` + 1.
+    // Additionally it is important to understand that the `actual_floor_block` wont ever turn into
+    // `ran_out_right` state. The `ran_out_right` state marks a block where all elements contained by this block
+    // are sorted on the left side of the current global floor value.
+    // So there are only two cases where the tracker could be outside of the valid range of the underlying
+    // data buffer:
+    // 1. We are focusing the floor block and our tracker is equals to `self.length` - 1:
+    // In this case the following if clause would return false, because the `succ_index` would be equal
+    // to `self.length`. So `SUCC_DUMMY_VALUE` would be returned and no access on the underlying data buffer
+    // occurs.
+    // 2. We are focusing a block, which is in `ran_out_right` state:
+    // As you can see in the function `get_successor_index` length of the block will be returned if the block
+    // is in `ran_out_right` state. Also in this case the if clause would return false, because `succ_index` would
+    // be equal to `self.length` and `SUCC_DUMMY_VALUE` would be returned.
     #[inline(always)]
     fn get_successor_value(&self) -> OrderedDouble {
         let succ_index = self.get_successor_index();
@@ -443,6 +509,19 @@ impl QuantileWindow {
         }
     }
 
+    // SAFETY: First of all this function belongs to the funcion named `prepare`. So this marks one
+    // step of the initial phase of the window. There could append only one case where the unsafe
+    // blocks would lead to undefined behavior:
+    // `old_floor_block_index` or `new_floor_block_index` are out of range of the `self.block_data` buffer:
+    // If the function is called the very first time `old_floor_block_index` will be the result of the function
+    // `find_value_by_rank`. Short explanation: This function uses a median of medians approach on the sorted blocks
+    // to determine the initial floor value. In conclusion the first `old_floor_block_index` will always be a valid
+    // index.
+    // The `new_floor_block_index` comes from the root of the so called `succ_tree`. Short explanation: The
+    // `succ_tree` is a tournament tree containing the minimum value of all successors of the current floor value.
+    // It tracks down the value and the `block_index` of the block where the values comes from.
+    // The tree is initialized after the initial floor value determination on all blocks with the
+    // corresponding block indexes.
     fn skip_duplicates(&mut self, duplicates_to_skip: usize) {
         let mut duplicates_to_skip = duplicates_to_skip;
         while duplicates_to_skip > 0 {

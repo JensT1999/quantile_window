@@ -27,8 +27,34 @@ impl Display for WindowError {
 
 impl std::error::Error for WindowError {}
 
-pub fn rolling_quantile_window(input_array: &[f64], window_size: usize, quantile: f64) ->
-    Result<Vec<f64>, WindowError> {
+/// Computes a rolling quantile over an input slice/array.
+///
+/// Uses an optimized rolling window mechanism to return a vector containing the calculated quantile
+/// for every possible window position.
+/// Please note: This window will always step one element to the right! The steps are not parameterizable.
+///
+/// # Returns
+/// A vector containing the calculated quantiles.
+/// Please note: The vector always will be of the size [(input_array.len() - window_size) + 1].
+///
+/// # Errors
+///
+/// Returns a ['WindowError'] if:
+/// * 'input_array' is empty (['WindowError::InputArrayIsEmptyError']).
+/// * 'window_size' is 0 or larger than 'input_array.len()' (['WindowError::SizingError']).
+/// * 'quantile' is outside the valid range (['0.0, 1.0']) (['WindowError::InvalidQuantileError'])
+///
+/// # Example
+/// ```
+/// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+/// let res = rolling_quantile_window(&data, 3, 0.5);
+/// assert!(res.is_ok());
+/// ```
+pub fn rolling_quantile_window(
+    input_array: &[f64],
+    window_size: usize,
+    quantile: f64
+    ) -> Result<Vec<f64>, WindowError> {
     if input_array.is_empty() {
         return Err(WindowError::InputArrayIsEmptyError);
     }
@@ -46,6 +72,10 @@ pub fn rolling_quantile_window(input_array: &[f64], window_size: usize, quantile
 }
 
 fn valid_quantile(quantile: f64) -> bool {
+    if quantile.is_nan() || quantile.is_infinite() {
+        return false;
+    }
+
     if quantile <= 0.0 || quantile > 1.0 {
         return false;
     }
