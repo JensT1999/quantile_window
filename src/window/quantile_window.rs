@@ -1111,26 +1111,28 @@ where
         let mut current_index = target_node_index;
         loop {
             let parent_index = quantilewindow_tree_utils::tree_parent_index(current_index);
-            let parent_node = unsafe {
-                self.data.get_unchecked_mut(parent_index)
+            let mut selected_node = unsafe {
+                *self.data.get_unchecked(parent_index)
             };
 
-            if parent_node.block_index == target_block_index {
-                if T::is_better(current_node.value, parent_node.value) {
-                    *parent_node = current_node;
+            if selected_node.block_index == target_block_index {
+                if T::is_better(current_node.value, selected_node.value) {
+                    selected_node = current_node;
                 } else {
                     let target_node = self.select_real_following_child(parent_index);
-                    unsafe {
-                        *self.data.get_unchecked_mut(parent_index) = target_node;
-                    }
+                    selected_node = target_node;
                 }
             } else {
-                if parent_node.block_index == TREE_INVALID_BLOCK_IDX ||
-                    T::is_better(current_node.value, parent_node.value) {
-                    *parent_node = current_node;
+                if selected_node.block_index == TREE_INVALID_BLOCK_IDX ||
+                    T::is_better(current_node.value, selected_node.value) {
+                    selected_node = current_node;
                 } else {
                     break;
                 }
+            }
+
+            unsafe {
+                *self.data.get_unchecked_mut(parent_index) = selected_node;
             }
 
             current_index = parent_index;
