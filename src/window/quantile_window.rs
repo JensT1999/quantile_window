@@ -5,14 +5,171 @@
 //!
 //! # Implementation Overview
 //!
+//! ## Block layout
+//!
+//! The input window is partitioned into fixed-size blocks of [`BLOCK_SIZE`]
+//! elements. By default, [`BLOCK_SIZE`] is 64, although other values are
+//! supported. The chosen block size must be a multiple of
+//! [`SORTING_NETWORK_SIZE`], since blocks are initially sorted using a sorting
+//! network.
+//!
+//! The default value of 64 was determined experimentally. Increasing
+//! [`BLOCK_SIZE`] may reduce performance, since
+//! [`QuantileWindow::update_block_elements`] performs a linear search within a
+//! block to locate the element that has to be removed.
+//!
+//! ## Internal state
+//!
+//! The internal state is represented by [`QuantileWindow`], which owns
+//! - an array of [`QuantileWindowBlock`]s,
+//! - a queue storing the elements in insertion order, and
+//! - two tournament trees used to maintain the global predecessor and successor
+//!   candidates.
+//!
 //! The internal data structures are fully determined by the `window_size` passed
 //! to [`rolling_window`]. This includes the number of blocks, the queue length,
 //! and the size of the tournament trees. Everything is preallocated - No dynamic
 //! allocations occur during the execution of [`rolling_window`].
 //!
+//! ## Tournament trees
+//!
+//! Every node of both tournament trees stores two pieces of information:
+//! the candidate value contributed by a block and the index of the
+//! corresponding [`QuantileWindowBlock`] within the internal block array.
+//!
+//! Two dedicated dummy values are used throughout the tournament trees:
+//! [`PRED_DUMMY_VALUE`] (equal to [`OrderedDouble::MAX`]) and
+//! [`SUCC_DUMMY_VALUE`] (equal to [`OrderedDouble::MIN`]). These values ensure
+//! that invalid blocks are always propagated to the bottom of the predecessor
+//! and successor trees, respectively.
+//!
+//! In addition, [`TREE_INVALID_BLOCK_IDX`] is used to distinguish valid block
+//! references from invalid ones. A block is considered invalid by the
+//! tournament trees if it is in the `ran_out_right` state or if the node
+//! corresponds to one of the padding nodes required because the tournament
+//! trees are always represented as perfect k-ary trees.
+//!
+//! Both tournament trees are implemented as `K_ARY`-ary trees. Consequently,
+//! the number of leaf nodes is always rounded up to the next power of
+//! `K_ARY`, ensuring that both trees remain perfectly balanced.
+//!
+//! ## Execution phases
+//!
 //! The [`rolling_window`] computation consists of two phases:
 //!   1. The initial fill phase
 //!   2. The update phase
+//!
+//! ## Initial fill phase
+//!
+//! During the initial fill phase, incoming elements are distributed block by
+//! block. Each block is filled until it contains [`BLOCK_SIZE`] elements before
+//! the next block is used. Once the last block has been filled, the preparation
+//! for the update phase begins.
+//!
+//! The preparation phase begins by sorting every [`QuantileWindowBlock`]. This
+//! is achieved by combining the previously mentioned sorting network with a
+//! k-way merge algorithm.
+//!
+//! Once all blocks are sorted, the initial global `floor_value` is determined
+//! by [`QuantileWindow::find_value_by_rank`]. The `floor_value` is defined as
+//! the lower interpolation value, i.e. the value corresponding to the floored
+//! rank of the requested quantile. If the requested rank is an integer, the
+//! `floor_value` is equal to the exact global quantile. The requested rank is
+//! computed as `quantile * (current_size - 1)`. Since the window size is fixed
+//! during computation, `current_size` is equal to the configured window size
+//! once the preparation phase has completed.
+//!
+//! The initial `floor_value` is found using an algorithm inspired by the
+//! median-of-medians selection algorithm, operating directly on the sorted
+//! [`QuantileWindowBlock`] instances.
+//!
+//! After determining the `floor_value`, together with the block containing it
+//! and its local index, the block trackers are initialized. A block tracker
+//! marks the local lower bound of the global `floor_value`. In other words, it
+//! separates the values of a block into those that would appear to the left of
+//! the global `floor_value` in the globally sorted order and those that would
+//! appear to its right.
+//!
+//! Next, both tournament trees are initialized. Every block contributes one
+//! successor candidate and one predecessor candidate:
+//!
+//! - The successor tree receives the value at the block's tracker position.
+//!   The only exception is the block containing the current `floor_value`,
+//!   which contributes the value at `tracker + 1`.
+//! - The predecessor tree always receives the value at `tracker - 1`.
+//!
+//! Finally, duplicate values are handled. Since the median-of-medians based
+//! selection may return a `floor_value` located in the middle of a sequence of
+//! duplicate values, the global position has to be shifted to the first valid
+//! occurrence.
+//!
+//! During [`QuantileWindow::initialize_block_tracker`], the tracker of the
+//! floor block is therefore moved to the beginning of the local sequence of
+//! duplicates. In addition, [`QuantileWindow::find_value_by_rank`] returns the
+//! number of duplicate positions that still have to be skipped relative to the
+//! requested rank and the global lower bound of the `floor_value`.
+//!
+//! This shift is then performed iteratively using the successor tree until the
+//! remaining number of duplicate positions to skip reaches zero. In each
+//! iteration, the root of the successor tree yields the next occurrence of the
+//! global `floor_value`. The metadata stored alongside the successor value
+//! identifies the corresponding block, which becomes the new floor block.
+//!
+//! During each shift, the tournament trees are updated for both the previous
+//! (`old_floor_block`) and the new (`new_floor_block`) floor block. In
+//! particular, the tracker of the `old_floor_block` advances by one position,
+//! causing its successor and predecessor candidates to be updated accordingly.
+//!
+//! //! ## Update phase
+//!
+//! During the update phase, old values are continuously replaced by newly
+//! incoming values. Similar to the initial fill phase, the update process
+//! starts with the first [`QuantileWindowBlock`].
+//!
+//! Each [`QuantileWindowBlock`] is updated for exactly the number of elements
+//! defined by its internal length before the next block is processed. Once the
+//! last block has been completely updated, the process starts again with the
+//! first block. Therefore, the update process behaves similarly to a circular
+//! buffer.
+//!
+//! The removed value is obtained from the insertion-order queue. Its position is
+//! determined by the current block index multiplied by [`BLOCK_SIZE`] plus the
+//! internal update index of the block. This update index tracks how many
+//! elements of the corresponding block have already been replaced.
+//!
+//! The main challenge during the update phase is maintaining the global
+//! quantile position after local block modifications. The block tracker
+//! separates each block into a left and right partition relative to the global
+//! `floor_value`.
+//!
+//! Changes in the distribution of values between these partitions cause the
+//! tracker to move. For example, removing a value from the left partition and
+//! inserting a value into the right partition shifts the tracker one position
+//! to the left. The opposite operation shifts the tracker one position to the
+//! right.
+//!
+//! Every local tracker movement is translated into a global window-level delta.
+//! This delta tracking represents the cumulative effect of all local block
+//! modifications on the global quantile position. The resulting shift depends
+//! on the relative positions of the removed and inserted values within the
+//! block.
+//!
+//! The exact tracker adjustments performed during a block update are implemented
+//! in [`QuantileWindow::update_block`].
+//!
+//! After the local block update has completed, the previously accumulated global
+//! shift has to be compensated. This is performed by
+//! [`QuantileWindow::global_right_shift`] and
+//! [`QuantileWindow::global_left_shift`].
+//!
+//! These functions shift the global `floor_value` until its current rank matches
+//! the original target rank calculated during the preparation phase again. The
+//! performed shifts are conceptually similar to the duplicate correction shifts
+//! described previously.
+//!
+//! The difference is that [`QuantileWindow::global_left_shift`] traverses the
+//! roots of the predecessor tree, while [`QuantileWindow::global_right_shift`]
+//! traverses the roots of the successor tree.
 //!
 //! The implementation maintains several invariants:
 //!
