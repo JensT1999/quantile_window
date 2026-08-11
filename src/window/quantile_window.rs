@@ -214,7 +214,8 @@ const SUCC_DUMMY_VALUE: OrderedDouble = OrderedDouble::MAX;
 const TREE_INVALID_BLOCK_IDX: usize = usize::MAX;
 
 struct QuantileWindow {
-    current_size: usize,
+    element_count: usize,
+    invalid_count: usize,
 
     quantile: f64,
     searched_rank: f64,
@@ -444,7 +445,8 @@ impl QuantileWindow {
             tree_calculate_metadata(needed_blocks);
 
         let result_window = QuantileWindow {
-            current_size: 0,
+            element_count: 0,
+            invalid_count: 0,
             quantile,
             searched_rank: 0.0,
             global_floor_rank: 0,
@@ -478,16 +480,21 @@ impl QuantileWindow {
         };
 
         current_block.data[current_block.length] = value;
-        self.queue_data[self.current_size] = value;
+        self.queue_data[self.element_count] = value;
         current_block.length += 1;
-        self.current_size += 1;
+        self.element_count += 1;
+
+        if quantilewindow_utils::is_invalid_value(value) {
+            self.invalid_count += 1;
+        }
     }
 
     // Prepare
     fn prepare(&mut self) {
         self.initial_sort();
 
-        let searched_rank = self.quantile * ((self.current_size - 1) as f64);
+        let current_size = self.element_count - self.invalid_count;
+        let searched_rank = self.quantile * ((current_size - 1) as f64);
         let floor_rank = searched_rank.floor() as usize;
 
         let selection_result = self.find_value_by_rank(floor_rank);
@@ -690,6 +697,7 @@ impl QuantileWindow {
                 self.block_data.get_unchecked_mut(old_floor_block_index)
             };
             old_floor_block.tracker_forwards();
+            old_floor_block.set_actual_floor_block(false);
             self.pred_tree.update_tree(old_floor_block,
                 old_floor_block_index);
             self.succ_tree.update_tree(old_floor_block,
@@ -698,8 +706,9 @@ impl QuantileWindow {
             // New floor block adjustment
             let new_floor_block_index = new_floor_data.block_index;
             let new_floor_block = unsafe {
-                self.block_data.get_unchecked(new_floor_block_index)
+                self.block_data.get_unchecked_mut(new_floor_block_index)
             };
+            new_floor_block.set_actual_floor_block(true);
             self.succ_tree.update_tree(new_floor_block,
                 new_floor_block_index);
 
@@ -711,41 +720,67 @@ impl QuantileWindow {
     fn update_window(&mut self, new_value: OrderedDouble) {
         let actual_block_index = self.actual_block;
         let old_value = self.update_queue_get_old_value(new_value);
+
+        let old_value_invalid = quantilewindow_utils::is_invalid_value(old_value);
+        let new_value_invalid = quantilewindow_utils::is_invalid_value(new_value);
+
+        if old_value_invalid && new_value_invalid {
+            self.update_tracked_block();
+            return;
+        }
+
+        if self.empty() {
+            let last_floor_block_index = self.actual_floor_block_index;
+            let last_floor_block = unsafe {
+                self.block_data.get_unchecked_mut(last_floor_block_index)
+            };
+            last_floor_block.set_actual_floor_block(false);
+
+            let actual_block_index = self.actual_block;
+            let actual_block = unsafe {
+                self.block_data.get_unchecked_mut(actual_block_index)
+            };
+
+            actual_block.data[0] = new_value;
+            actual_block.set_actual_floor_block(true);
+
+            self.actual_floor_value = new_value;
+            self.actual_floor_block_index = actual_block_index;
+
+            // Need to readjust?? because now there is only one element in the complete window
+            // self.actual_floor_rank = 0;
+
+            self.invalid_count -= 1;
+
+            self.update_tracked_block();
+            return;
+        }
+
+        if old_value_invalid {
+            self.invalid_count -= 1;
+        }
+
+        if new_value_invalid {
+            self.invalid_count += 1;
+        }
+
         let insertion_indizes = self.update_block_elements(new_value, old_value);
-
         let update_result = if actual_block_index == self.actual_floor_block_index {
-            self.update_block::<true>(new_value, insertion_indizes)
+            self.update_block::<true>(
+                new_value,
+                new_value_invalid,
+                insertion_indizes
+            )
         } else {
-            self.update_block::<false>(new_value, insertion_indizes)
+            self.update_block::<false>(
+                new_value,
+                new_value_invalid,
+                insertion_indizes
+            )
         };
 
-        let actual_block = unsafe {
-            self.block_data.get_unchecked_mut(actual_block_index)
-        };
-
-        actual_block.tracker = update_result.new_tracker;
-        actual_block.ran_out_right = update_result.ran_out_right;
-
-        if update_result.update_pred_tree {
-            self.pred_tree.update_tree(actual_block,
-                actual_block_index);
-        }
-
-        if update_result.update_succ_tree {
-            self.succ_tree.update_tree(actual_block,
-                actual_block_index);
-        }
-
-        if (actual_block.update_index + 1) == actual_block.length {
-            actual_block.update_index = 0;
-            self.actual_block = if (self.actual_block + 1) == self.block_data.len() {
-                0
-            } else {
-                self.actual_block + 1
-            }
-        } else {
-            actual_block.update_index += 1;
-        }
+        self.handle_update_result(update_result);
+        self.update_tracked_block();
     }
 
     fn update_queue_get_old_value(&mut self, new_value: OrderedDouble) -> OrderedDouble {
@@ -784,8 +819,50 @@ impl QuantileWindow {
         (old_value_index, new_value_index)
     }
 
-    fn update_block<const IS_FLOOR_BLOCK: bool>(&mut self, new_value: OrderedDouble,
-        insertion_indizes: (usize, usize)) -> QuantileWindowUpdateResult {
+    fn handle_update_result(&mut self, update_result: QuantileWindowUpdateResult) {
+        let actual_block_index = self.actual_block;
+        let actual_block = unsafe {
+            self.block_data.get_unchecked_mut(actual_block_index)
+        };
+
+        actual_block.tracker = update_result.new_tracker;
+        actual_block.ran_out_right = update_result.ran_out_right;
+
+        if update_result.update_pred_tree {
+            self.pred_tree.update_tree(actual_block,
+                actual_block_index);
+        }
+
+        if update_result.update_succ_tree {
+            self.succ_tree.update_tree(actual_block,
+                actual_block_index);
+        }
+    }
+
+    fn update_tracked_block(&mut self) {
+        let actual_block_index = self.actual_block;
+        let actual_block = unsafe {
+            self.block_data.get_unchecked_mut(actual_block_index)
+        };
+
+        if (actual_block.update_index + 1) == actual_block.length {
+            actual_block.update_index = 0;
+            self.actual_block = if (self.actual_block + 1) == self.block_data.len() {
+                0
+            } else {
+                self.actual_block + 1
+            }
+        } else {
+            actual_block.update_index += 1;
+        }
+    }
+
+    fn update_block<const IS_FLOOR_BLOCK: bool>(
+        &mut self,
+        new_value: OrderedDouble,
+        new_value_invalid: bool,
+        insertion_indizes: (usize, usize)
+    ) -> QuantileWindowUpdateResult {
         let actual_block_index = self.actual_block;
         let actual_block = unsafe {
             self.block_data.get_unchecked(actual_block_index)
@@ -802,7 +879,7 @@ impl QuantileWindow {
         let mut update_tracker = true;
 
         if actual_block.ran_out_right {
-            if new_value >= self.actual_floor_value {
+            if new_value >= self.actual_floor_value && !new_value_invalid {
                 new_tracker = new_index;
                 ran_out_right = false;
 
@@ -812,6 +889,22 @@ impl QuantileWindow {
                 update_succ_tree = true;
                 update_tracker = false;
             } else {
+                if new_value_invalid {
+                    new_tracker = new_index;
+                    ran_out_right = false;
+
+                    self.actual_floor_rank -= 1;
+
+                    update_pred_tree = true;
+
+                    return QuantileWindowUpdateResult {
+                        new_tracker,
+                        ran_out_right,
+                        update_pred_tree,
+                        update_succ_tree
+                    };
+                }
+
                 if deleted_index == (actual_block_len - 1) ||
                     new_index == (actual_block_len - 1) {
                     update_pred_tree = true;
@@ -865,7 +958,8 @@ impl QuantileWindow {
         }
 
         if new_index == new_tracker {
-            if new_value <= self.actual_floor_value {
+            // Maybe richtiger fix? Muss nochmal schauen
+            if new_value <= self.actual_floor_value && !new_value_invalid {
                 new_tracker += 1;
                 self.actual_floor_rank += 1;
                 update_pred_tree = true;
@@ -914,7 +1008,7 @@ impl QuantileWindow {
         self.actual_floor_value = new_floor_data.value;
     }
 
-    fn result_quantile(&mut self) -> f64 {
+    fn result_quantile(&self) -> f64 {
         let floor_value: f64 = self.actual_floor_value.to_f64();
         if !self.interpolation {
             return floor_value;
@@ -929,6 +1023,17 @@ impl QuantileWindow {
     }
 
     fn adjust_and_result_quantile(&mut self) -> f64 {
+        if self.empty() {
+            return f64::NAN;
+        }
+
+        let current_size = self.valid_size();
+        let searched_rank = self.quantile * ((current_size - 1) as f64);
+        let floor_rank = searched_rank.floor() as usize;
+        self.searched_rank = searched_rank;
+        self.global_floor_rank = floor_rank;
+        self.interpolation = !((searched_rank % 1.0) == 0.0);
+
         self.global_right_shift();
         self.global_left_shift();
         self.result_quantile()
@@ -995,6 +1100,16 @@ impl QuantileWindow {
             self.actual_floor_rank -= 1;
         }
     }
+
+    #[inline(always)]
+    fn empty(&self) -> bool {
+        self.valid_size() == 0
+    }
+
+    #[inline(always)]
+    fn valid_size(&self) -> usize {
+        self.element_count - self.invalid_count
+    }
 }
 
 // Utils
@@ -1012,7 +1127,11 @@ mod quantilewindow_utils {
     }
 
     #[inline(always)]
-    pub fn shift_in_backwards(data: &mut [OrderedDouble], old_value_index: usize, new_value: OrderedDouble) -> usize {
+    pub fn shift_in_backwards(
+        data: &mut [OrderedDouble],
+        old_value_index: usize,
+        new_value: OrderedDouble
+    ) -> usize {
         debug_assert!(!data.is_empty());
         debug_assert!(old_value_index < data.len());
 
@@ -1029,7 +1148,11 @@ mod quantilewindow_utils {
     }
 
     #[inline(always)]
-    pub fn shift_in_forwards(data: &mut [OrderedDouble], old_value_index: usize, new_value: OrderedDouble) -> usize {
+    pub fn shift_in_forwards(
+        data: &mut [OrderedDouble],
+        old_value_index: usize,
+        new_value: OrderedDouble
+    ) -> usize {
         debug_assert!(!data.is_empty());
         debug_assert!(old_value_index < data.len());
 
@@ -1044,19 +1167,13 @@ mod quantilewindow_utils {
 
         index
     }
+
+    #[inline(always)]
+    pub fn is_invalid_value(tested_value: OrderedDouble) -> bool {
+        tested_value == OrderedDouble::MAX
+    }
 }
 // Tree
-
-trait QuantileWindowTreeFunctions<T>
-where
-    T: QuantileWindowTreeType {
-    fn new(tree_metadata: (usize, usize)) -> QuantileWindowTree<T>;
-    fn initialize_tree(&mut self, block_data: &[QuantileWindowBlock]);
-    fn select_real_following_child(&self, position: usize) -> QuantileWindowTreeNode;
-    fn select_following_child(&self, position: usize) -> usize;
-    fn update_tree(&mut self, target_block: &QuantileWindowBlock, target_block_index: usize);
-    fn get_root(&self) -> QuantileWindowTreeNode;
-}
 
 mod quantilewindow_tree_utils {
     use crate::window::quantile_window::K_ARY;
@@ -1165,7 +1282,7 @@ where
     }
 }
 
-impl<T> QuantileWindowTreeFunctions<T> for QuantileWindowTree<T>
+impl<T> QuantileWindowTree<T>
 where
     T: QuantileWindowTreeType {
 
@@ -1314,19 +1431,37 @@ pub fn rolling_window(input_array: &[f64], window_size: usize, quantile: f64) ->
         .iter()
         .fold(QuantileWindow::new(window_size, quantile),
             |mut window, value| {
-                window.add(OrderedDouble::from_f64(*value));
+                let input_value = if value.is_nan() {
+                    OrderedDouble::MAX
+                } else {
+                    OrderedDouble::from_f64(*value)
+                };
+
+                window.add(input_value);
                 window
             });
 
-    window.prepare();
+    if !window.empty() {
+        window.prepare();
+    }
+
     let first_result = window.result_quantile();
     result_vec.push(first_result);
 
     let input_slice = &input_array[window_size..];
     input_slice
         .iter()
+        .enumerate()
         .for_each(|value| {
-            let input_value = OrderedDouble::from_f64(*value);
+            if value.0 == 3890 {
+                println!("test");
+            }
+
+            let input_value = if value.1.is_nan() {
+                OrderedDouble::MAX
+            } else {
+                OrderedDouble::from_f64(*value.1)
+            };
             window.update_window(input_value);
 
             let result = window.adjust_and_result_quantile();
@@ -1552,7 +1687,7 @@ mod tests {
         let test_window = QuantileWindow::
             new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
 
-        assert!(test_window.current_size == 0);
+        assert!(test_window.element_count == 0);
         assert!(test_window.quantile == QUANTILEWINDOW_TEST_QUANTILE);
         assert!(test_window.searched_rank == 0.0);
         assert!(test_window.global_floor_rank == 0);
@@ -1639,7 +1774,7 @@ mod tests {
 
         let result_blocks_length = calculate_blocks_length(&test_window.block_data);
         assert!(result_blocks_length == QUANTILEWINDOW_TEST_SIZE);
-        assert!(test_window.current_size == QUANTILEWINDOW_TEST_SIZE);
+        assert!(test_window.element_count == QUANTILEWINDOW_TEST_SIZE);
     }
 
     #[track_caller]
