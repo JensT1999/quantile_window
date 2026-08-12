@@ -812,6 +812,14 @@ impl QuantileWindow {
 
         actual_block.data[0] = new_value;
         actual_block.set_actual_floor_block(true);
+        self.pred_tree.update_tree(
+            actual_block,
+            actual_block_index
+        );
+        self.succ_tree.update_tree(
+            actual_block,
+            actual_block_index
+        );
 
         self.actual_floor_value = new_value;
         self.actual_floor_block_index = actual_block_index;
@@ -945,6 +953,8 @@ impl QuantileWindow {
 
         if deleted_index == old_tracker {
             if IS_FLOOR_BLOCK {
+                // IF SUCCESSOR == DUMMY VALUE
+
                 self.update_global_to_successor();
             } else {
                 update_succ_tree = true;
@@ -1002,15 +1012,6 @@ impl QuantileWindow {
 
         // Adjustment of new floor block
         let new_floor_data = self.succ_tree.get_root();
-
-        // ABSOLUTE EXP
-        // if new_floor_data.block_index == TREE_INVALID_BLOCK_IDX {
-        //     self.actual_floor_block_index = TREE_INVALID_BLOCK_IDX;
-        //     self.actual_floor_value = OrderedDouble::MAX;
-
-        //     return;
-        // }
-
         let new_floor_block = unsafe {
             self.block_data.get_unchecked_mut(new_floor_data.block_index)
         };
@@ -1471,11 +1472,16 @@ pub fn rolling_window(input_array: &[f64], window_size: usize, quantile: f64) ->
     let input_slice = &input_array[window_size..];
     input_slice
         .iter()
+        .enumerate()
         .for_each(|value| {
-            let input_value = if value.is_nan() {
+            if value.0 == 3890 {
+                println!("test");
+            }
+
+            let input_value = if value.1.is_nan() {
                 OrderedDouble::MAX
             } else {
-                OrderedDouble::from_f64(*value)
+                OrderedDouble::from_f64(*value.1)
             };
             window.update_window(input_value);
 
