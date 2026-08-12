@@ -8,50 +8,40 @@ use std::f64::consts::PI;
 const TEST_VEC_LEN: usize = 100000000;
 
 // 100 + 796, window = 100
-const VALID_NUM_LENGTH: usize = 50000;
-const NAN_NUM_LENGTH: usize = 50000;
+const VALID_NUM_LENGTH: usize = 1;
+const NAN_NUM_LENGTH: usize = 19999;
 const TEST_VEC_LEN_2: usize = VALID_NUM_LENGTH + NAN_NUM_LENGTH;
 
-const WINDOW_SIZE: usize = 10000000;
+const WINDOW_SIZE: usize = 100;
 const QUANTILE: f64 = 0.5;
 
 fn main() {
-    test_window();
+    test_nan_window();
 }
 
 fn test_nan_window() {
-    // let mut rng = StdRng::seed_from_u64(189);
-    let mut rng = rand::rng();
-    // let mut window_vec: Vec<f64> = Vec::with_capacity(WINDOW_SIZE);
-
-    // let mut count = 0;
-    // while count < WINDOW_SIZE {
-    //     window_vec.push(rng.random_range(-1000.0..1000.0));
-    //     count += 1;
-    // }
-
-    let mut test_vec: Vec<f64> = Vec::with_capacity(TEST_VEC_LEN_2);
+    let mut rng = StdRng::seed_from_u64(64);
+    // let mut rng = rand::rng();
+    let mut window_vec: Vec<f64> = Vec::with_capacity(TEST_VEC_LEN_2);
 
     let mut count = 0;
     while count < VALID_NUM_LENGTH {
-        test_vec.push(rng.random_range(-1000.0..1000.0));
+        window_vec.push(rng.random_range(-1000.0..1000.0));
         count += 1;
     }
 
     let mut count = 0;
     while count < NAN_NUM_LENGTH {
-        test_vec.push(f64::NAN);
+        window_vec.push(f64::NAN);
         count += 1;
     }
 
-    test_vec.shuffle(&mut rng);
+    window_vec.shuffle(&mut rng);
 
-    // window_vec.extend(test_vec.iter());
+    let cloned_input = window_vec.clone();
+    let test_quantiles = gen_test_quantiles_nan_dynamic(&cloned_input, WINDOW_SIZE, QUANTILE);
 
-    let cloned_input = test_vec.clone();
-    let test_quantiles = gen_test_quantiles_nan_static(&cloned_input, WINDOW_SIZE, QUANTILE);
-
-    let result = window::rolling_quantile_window(&test_vec, WINDOW_SIZE, QUANTILE).unwrap();
+    let result = window::rolling_quantile_window(&window_vec, WINDOW_SIZE, QUANTILE).unwrap();
 
     // println!("Test Results {:?}", test_quantiles);
     // println!("");

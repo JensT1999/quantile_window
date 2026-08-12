@@ -730,28 +730,7 @@ impl QuantileWindow {
         }
 
         if self.empty() {
-            let last_floor_block_index = self.actual_floor_block_index;
-            let last_floor_block = unsafe {
-                self.block_data.get_unchecked_mut(last_floor_block_index)
-            };
-            last_floor_block.set_actual_floor_block(false);
-
-            let actual_block_index = self.actual_block;
-            let actual_block = unsafe {
-                self.block_data.get_unchecked_mut(actual_block_index)
-            };
-
-            actual_block.data[0] = new_value;
-            actual_block.set_actual_floor_block(true);
-
-            self.actual_floor_value = new_value;
-            self.actual_floor_block_index = actual_block_index;
-
-            // Need to readjust?? because now there is only one element in the complete window
-            // self.actual_floor_rank = 0;
-
-            self.invalid_count -= 1;
-
+            self.reinitialize_window(new_value);
             self.update_tracked_block();
             return;
         }
@@ -819,6 +798,30 @@ impl QuantileWindow {
         (old_value_index, new_value_index)
     }
 
+    fn reinitialize_window(&mut self, new_value: OrderedDouble) {
+        let last_floor_block_index = self.actual_floor_block_index;
+        let last_floor_block = unsafe {
+            self.block_data.get_unchecked_mut(last_floor_block_index)
+        };
+        last_floor_block.set_actual_floor_block(false);
+
+        let actual_block_index = self.actual_block;
+        let actual_block = unsafe {
+            self.block_data.get_unchecked_mut(actual_block_index)
+        };
+
+        actual_block.data[0] = new_value;
+        actual_block.set_actual_floor_block(true);
+
+        self.actual_floor_value = new_value;
+        self.actual_floor_block_index = actual_block_index;
+
+        // Need to readjust?? because now there is only one element in the complete window
+        // self.actual_floor_rank = 0;
+
+        self.invalid_count -= 1;
+    }
+
     fn handle_update_result(&mut self, update_result: QuantileWindowUpdateResult) {
         let actual_block_index = self.actual_block;
         let actual_block = unsafe {
@@ -878,7 +881,7 @@ impl QuantileWindow {
         let mut ran_out_right = actual_block.ran_out_right;
         let mut update_tracker = true;
 
-        if actual_block.ran_out_right {
+        if ran_out_right {
             if new_value >= self.actual_floor_value && !new_value_invalid {
                 new_tracker = new_index;
                 ran_out_right = false;
@@ -889,6 +892,8 @@ impl QuantileWindow {
                 update_succ_tree = true;
                 update_tracker = false;
             } else {
+
+                // EXP
                 if new_value_invalid {
                     new_tracker = new_index;
                     ran_out_right = false;
@@ -997,6 +1002,15 @@ impl QuantileWindow {
 
         // Adjustment of new floor block
         let new_floor_data = self.succ_tree.get_root();
+
+        // ABSOLUTE EXP
+        // if new_floor_data.block_index == TREE_INVALID_BLOCK_IDX {
+        //     self.actual_floor_block_index = TREE_INVALID_BLOCK_IDX;
+        //     self.actual_floor_value = OrderedDouble::MAX;
+
+        //     return;
+        // }
+
         let new_floor_block = unsafe {
             self.block_data.get_unchecked_mut(new_floor_data.block_index)
         };
@@ -1384,7 +1398,9 @@ where
 
         let mut current_index = target_node_index;
         loop {
-            let parent_index = quantilewindow_tree_utils::tree_parent_index(current_index);
+            let parent_index = quantilewindow_tree_utils::tree_parent_index(
+                current_index
+            );
             let mut selected_node = unsafe {
                 *self.data.get_unchecked(parent_index)
             };
@@ -1393,7 +1409,9 @@ where
                 if T::is_better(current_node.value, selected_node.value) {
                     selected_node = current_node;
                 } else {
-                    let target_node = self.select_real_following_child(parent_index);
+                    let target_node = self.select_real_following_child(
+                        parent_index
+                    );
                     selected_node = target_node;
                 }
             } else {
@@ -1441,26 +1459,23 @@ pub fn rolling_window(input_array: &[f64], window_size: usize, quantile: f64) ->
                 window
             });
 
-    if !window.empty() {
+    // EXP
+    let first_result = if !window.empty() {
         window.prepare();
-    }
-
-    let first_result = window.result_quantile();
+        window.result_quantile()
+    } else {
+        f64::NAN
+    };
     result_vec.push(first_result);
 
     let input_slice = &input_array[window_size..];
     input_slice
         .iter()
-        .enumerate()
         .for_each(|value| {
-            if value.0 == 3890 {
-                println!("test");
-            }
-
-            let input_value = if value.1.is_nan() {
+            let input_value = if value.is_nan() {
                 OrderedDouble::MAX
             } else {
-                OrderedDouble::from_f64(*value.1)
+                OrderedDouble::from_f64(*value)
             };
             window.update_window(input_value);
 
