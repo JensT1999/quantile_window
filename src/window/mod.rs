@@ -76,7 +76,7 @@ fn valid_quantile(quantile: f64) -> bool {
         return false;
     }
 
-    if quantile <= 0.0 || quantile > 1.0 {
+    if quantile < 0.0 || quantile > 1.0 {
         return false;
     }
 
