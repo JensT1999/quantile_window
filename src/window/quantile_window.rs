@@ -791,9 +791,17 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
         let block_slice = &mut actual_block.data[0..actual_block.length];
         let old_value_index = block_slice.iter().filter(|&&x| x < old_value).count();
         let new_value_index = if new_value > old_value {
-            quantilewindow_utils::shift_in_forwards(block_slice, old_value_index, new_value)
+            quantilewindow_utils::shift_in_forwards(
+                block_slice,
+                old_value_index,
+                new_value
+            )
         } else if new_value < old_value {
-            quantilewindow_utils::shift_in_backwards(block_slice, old_value_index, new_value)
+            quantilewindow_utils::shift_in_backwards(
+                block_slice,
+                old_value_index,
+                new_value
+            )
         } else {
             block_slice[old_value_index] = new_value;
             old_value_index
@@ -1186,15 +1194,23 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
 
 // Utils
 mod quantilewindow_utils {
-    use crate::window::{utils::ordered_double::OrderedDouble};
+    use std::ptr;
+
+use crate::window::{utils::ordered_double::OrderedDouble};
 
     #[inline(always)]
-    pub fn calculate_needed_blocks<const BLOCK_SIZE: usize>(window_size: usize) -> usize {
+    pub fn calculate_needed_blocks<const BLOCK_SIZE: usize>(
+        window_size: usize
+    ) -> usize {
         window_size.div_ceil(BLOCK_SIZE)
     }
 
     #[inline(always)]
-    pub fn calculate_interpolated_quantile(searched_rank: f64, floor_value: f64, successor_value: f64) -> f64 {
+    pub fn calculate_interpolated_quantile(
+        searched_rank: f64,
+        floor_value: f64,
+        successor_value: f64
+    ) -> f64 {
         floor_value + (successor_value - floor_value) * (searched_rank - searched_rank.floor())
     }
 
@@ -1207,16 +1223,16 @@ mod quantilewindow_utils {
         debug_assert!(!data.is_empty());
         debug_assert!(old_value_index < data.len());
 
-        let mut index = old_value_index;
+        let new_value_index = data.iter().filter(|&&x| x <= new_value).count();
         unsafe {
-            while (index > 0) && (new_value < *data.get_unchecked(index - 1)) {
-                *data.get_unchecked_mut(index) = *data.get_unchecked(index - 1);
-                index -= 1;
-            }
-            *data.get_unchecked_mut(index) = new_value;
+            let start_ptr = data.as_mut_ptr().add(new_value_index);
+            ptr::copy(start_ptr,
+                start_ptr.add(1),
+                old_value_index - new_value_index);
+            *data.get_unchecked_mut(new_value_index) = new_value;
         }
 
-        index
+        new_value_index
     }
 
     #[inline(always)]
@@ -1228,16 +1244,16 @@ mod quantilewindow_utils {
         debug_assert!(!data.is_empty());
         debug_assert!(old_value_index < data.len());
 
-        let mut index = old_value_index;
+        let new_value_index = data.iter().filter(|&&x| x < new_value).count() - 1;
         unsafe {
-            while (index < (data.len() - 1)) && (new_value > *data.get_unchecked(index + 1)) {
-                *data.get_unchecked_mut(index) = *data.get_unchecked(index + 1);
-                index += 1;
-            }
-            *data.get_unchecked_mut(index) = new_value;
+            let start_ptr = data.as_mut_ptr().add(old_value_index);
+            ptr::copy(start_ptr.add(1),
+                start_ptr,
+                new_value_index - old_value_index);
+            *data.get_unchecked_mut(new_value_index) = new_value;
         }
 
-        index
+        new_value_index
     }
 
     #[inline(always)]
