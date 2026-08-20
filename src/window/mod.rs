@@ -3,6 +3,8 @@ use std::fmt::Display;
 mod quantile_window;
 mod utils;
 
+// Needs to be documented
+const WINDOW_SIZE_THRESHHOLD: usize = 10000;
 const QUANTILE_EPSILON: f64 = 1e-9;
 
 #[derive(Debug)]
@@ -45,12 +47,27 @@ impl std::error::Error for WindowError {}
 /// * 'quantile' is outside the valid range (['0.0, 1.0']) (['WindowError::InvalidQuantileError'])
 ///
 /// # Example
-/// ```
-/// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-/// let res = rolling_quantile_window(&data, 3, 0.5);
-/// assert!(res.is_ok());
-/// ```
 pub fn rolling_quantile_window(
+    input_array: &[f64],
+    window_size: usize,
+    quantile: f64
+) -> Result<Vec<f64>, WindowError> {
+    if window_size <= WINDOW_SIZE_THRESHHOLD {
+        rolling_quantile_window_generic::<16,1>(
+            input_array,
+            window_size,
+            quantile
+        )
+    } else {
+        rolling_quantile_window_generic::<32, 2>(
+            input_array,
+            window_size,
+            quantile
+        )
+    }
+}
+
+pub fn rolling_quantile_window_generic<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
     input_array: &[f64],
     window_size: usize,
     quantile: f64
@@ -67,7 +84,11 @@ pub fn rolling_quantile_window(
         return Err(WindowError::InvalidQuantileError);
     }
 
-    let result_vec = quantile_window::rolling_window(input_array, window_size, quantile);
+    let result_vec = quantile_window::rolling_window::<BLOCK_SIZE, SLICES_PER_BLOCK>(
+        input_array,
+        window_size,
+        quantile
+    );
     Ok(result_vec)
 }
 

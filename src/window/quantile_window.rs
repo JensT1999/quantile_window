@@ -199,20 +199,17 @@
 use std::{marker::PhantomData};
 
 use crate::window::utils::{
-    ordered_double::OrderedDouble,
-    sorting_networks,
+    ordered_double::OrderedDouble, sorting_networks,
 };
 
 const SORTING_NETWORK_SIZE: usize = 16;
-const BLOCK_SIZE: usize = 16;
-const SLICES_PER_BLOCK: usize = BLOCK_SIZE / SORTING_NETWORK_SIZE;
 const K_ARY: usize = 8;
 
 const PLACE_HOLDER_VALUE: OrderedDouble = OrderedDouble::MAX;
 const PRED_DUMMY_VALUE: OrderedDouble = OrderedDouble::MIN;
 const SUCC_DUMMY_VALUE: OrderedDouble = OrderedDouble::MAX;
 
-struct QuantileWindow {
+struct QuantileWindow<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize> {
     element_count: usize,
     invalid_count: usize,
 
@@ -225,7 +222,7 @@ struct QuantileWindow {
     interpolation: bool,
 
     actual_block: usize,
-    block_data: Vec<QuantileWindowBlock>,
+    block_data: Vec<QuantileWindowBlock<BLOCK_SIZE>>,
     queue_data: Vec<OrderedDouble>,
 
     pred_tree: QuantileWindowTree<QuantileWindowPredeccessorTree>,
@@ -233,7 +230,7 @@ struct QuantileWindow {
 }
 
 #[derive(Clone)]
-struct QuantileWindowBlock {
+struct QuantileWindowBlock<const BLOCK_SIZE: usize> {
     data: [OrderedDouble; BLOCK_SIZE],
     length: usize,
     update_index: usize,
@@ -242,9 +239,9 @@ struct QuantileWindowBlock {
     ran_out_right: bool,
 }
 
-impl QuantileWindowBlock {
+impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
 
-    fn sort(&mut self) {
+    fn sort<const SLICES_PER_BLOCK: usize>(&mut self) {
         let mut current_slice = 0;
         while current_slice < SLICES_PER_BLOCK {
             let slice_start_index = current_slice * SORTING_NETWORK_SIZE;
@@ -255,10 +252,10 @@ impl QuantileWindowBlock {
             current_slice += 1;
         }
 
-        self.k_way_merge_slices();
+        self.k_way_merge_slices::<SLICES_PER_BLOCK>();
     }
 
-    fn k_way_merge_slices(&mut self) {
+    fn k_way_merge_slices<const SLICES_PER_BLOCK: usize>(&mut self) {
         let mut temp_block_data = [OrderedDouble::from_f64(0.0); BLOCK_SIZE];
         temp_block_data.copy_from_slice(&self.data);
 
@@ -420,10 +417,11 @@ struct QuantileWindowUpdateResult {
     window_no_valid_succ: bool,
 }
 
-impl QuantileWindow {
+impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
+    QuantileWindow<BLOCK_SIZE, SLICES_PER_BLOCK> {
 
-    fn new(window_size: usize, quantile: f64) -> QuantileWindow {
-        let needed_blocks = quantilewindow_utils::calculate_needed_blocks(window_size);
+    fn new(window_size: usize, quantile: f64) -> Self {
+        let needed_blocks = quantilewindow_utils::calculate_needed_blocks::<BLOCK_SIZE>(window_size);
         let needed_queue_size = window_size;
 
         let result_window = QuantileWindow {
@@ -454,12 +452,13 @@ impl QuantileWindow {
     }
 
     fn add(&mut self, value: OrderedDouble) {
-        let current_block = if self.block_data[self.actual_block].length == BLOCK_SIZE {
-            self.actual_block += 1;
-            &mut self.block_data[self.actual_block]
-        } else {
-            &mut self.block_data[self.actual_block]
-        };
+        let current_block =
+            if self.block_data[self.actual_block].length == BLOCK_SIZE {
+                self.actual_block += 1;
+                &mut self.block_data[self.actual_block]
+            } else {
+                &mut self.block_data[self.actual_block]
+            };
 
         current_block.data[current_block.length] = value;
         self.queue_data[self.element_count] = value;
@@ -517,7 +516,7 @@ impl QuantileWindow {
     fn initial_sort(&mut self) {
         self.block_data
             .iter_mut()
-            .for_each(|block| block.sort());
+            .for_each(|block| block.sort::<SLICES_PER_BLOCK>());
     }
 
     fn find_value_by_rank(&self, searched_rank: usize) -> QuantileWindowSelectionResult {
@@ -1005,7 +1004,7 @@ impl QuantileWindow {
         let mut ran_out_right = actual_block.ran_out_right;
 
         if new_value >= self.actual_floor_value && !new_value_invalid {
-            new_tracker = new_index;
+            new_tracker = actual_block_len - 1;
             ran_out_right = false;
 
             self.actual_floor_rank -= 1;
@@ -1187,10 +1186,10 @@ impl QuantileWindow {
 
 // Utils
 mod quantilewindow_utils {
-    use crate::window::{quantile_window::BLOCK_SIZE, utils::ordered_double::OrderedDouble};
+    use crate::window::{utils::ordered_double::OrderedDouble};
 
     #[inline(always)]
-    pub fn calculate_needed_blocks(window_size: usize) -> usize {
+    pub fn calculate_needed_blocks<const BLOCK_SIZE: usize>(window_size: usize) -> usize {
         window_size.div_ceil(BLOCK_SIZE)
     }
 
@@ -1293,7 +1292,9 @@ where
 trait QuantileWindowTreeType {
     const DUMMY_VALUE: OrderedDouble;
 
-    fn get_corresponding_value(target_block: &QuantileWindowBlock) -> OrderedDouble;
+    fn get_corresponding_value<const BLOCK_SIZE: usize>(
+        target_block: &QuantileWindowBlock<BLOCK_SIZE>
+    ) -> OrderedDouble;
     fn is_better(value_one: OrderedDouble, value_two: OrderedDouble) -> bool;
 }
 
@@ -1302,7 +1303,9 @@ impl QuantileWindowTreeType for QuantileWindowPredeccessorTree {
     const DUMMY_VALUE: OrderedDouble = PRED_DUMMY_VALUE;
 
     #[inline(always)]
-    fn get_corresponding_value(target_block: &QuantileWindowBlock) -> OrderedDouble {
+    fn get_corresponding_value<const BLOCK_SIZE: usize>(
+        target_block: &QuantileWindowBlock<BLOCK_SIZE>
+    ) -> OrderedDouble {
         target_block.get_predeccessor_value()
     }
 
@@ -1317,7 +1320,9 @@ impl QuantileWindowTreeType for QuantileWindowSuccessorTree {
     const DUMMY_VALUE: OrderedDouble = SUCC_DUMMY_VALUE;
 
     #[inline(always)]
-    fn get_corresponding_value(target_block: &QuantileWindowBlock) -> OrderedDouble {
+    fn get_corresponding_value<const BLOCK_SIZE: usize>(
+        target_block: &QuantileWindowBlock<BLOCK_SIZE>
+    ) -> OrderedDouble {
         target_block.get_successor_value()
     }
 
@@ -1370,9 +1375,9 @@ impl<T> QuantileWindowTree<T>
 where
     T: QuantileWindowTreeType {
 
-    fn initialize_tree(
+    fn initialize_tree<const BLOCK_SIZE: usize>(
         &mut self,
-        block_data: &[QuantileWindowBlock]
+        block_data: &[QuantileWindowBlock<BLOCK_SIZE>]
     ) {
         for (index, block) in block_data.iter().enumerate() {
             let corresponding_value = T::get_corresponding_value(block);
@@ -1422,9 +1427,9 @@ where
         best
     }
 
-    fn update_tree(
+    fn update_tree<const BLOCK_SIZE: usize>(
         &mut self,
-        target_block: &QuantileWindowBlock,
+        target_block: &QuantileWindowBlock<BLOCK_SIZE>,
         target_block_index: usize
     ) {
         let target_node_index = self.tree_leaves_starting_index + target_block_index;
@@ -1488,18 +1493,26 @@ where
 }
 
 // Main function
-pub fn rolling_window(
+pub fn rolling_window<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
     input_array: &[f64],
     window_size: usize,
     quantile: f64
 ) -> Vec<f64> {
+    const {
+        assert!(
+            BLOCK_SIZE > 0 &&
+            BLOCK_SIZE % SORTING_NETWORK_SIZE == 0 &&
+            SLICES_PER_BLOCK * SORTING_NETWORK_SIZE == BLOCK_SIZE
+        );
+    }
+
     let result_vec_len = (input_array.len() - window_size) + 1;
     let mut result_vec = Vec::with_capacity(result_vec_len);
 
     let input_slice = &input_array[0..window_size];
     let mut window = input_slice
         .iter()
-        .fold(QuantileWindow::new(window_size, quantile),
+        .fold(QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::new(window_size, quantile),
             |mut window, value| {
                 let input_value = if value.is_nan() {
                     OrderedDouble::MAX
@@ -1705,6 +1718,8 @@ mod tests {
             .collect::<Vec<OrderedDouble>>()
     }
 
+    const BLOCK_SIZE: usize = 64;
+    const SLICES_PER_BLOCK: usize = BLOCK_SIZE / SORTING_NETWORK_SIZE;
     const RAND_TESTING_SEED: u64 = 109;
     const QUANTILEWINDOW_TEST_SIZE: usize = 1000;
     const QUANTILEWINDOW_TEST_QUANTILE: f64 = 0.01;
@@ -1713,7 +1728,7 @@ mod tests {
     fn test_calculate_needed_blocks() {
         let expected_needed_blocks = QUANTILEWINDOW_TEST_SIZE.div_ceil(BLOCK_SIZE);
         let needed_blocks = quantilewindow_utils::
-            calculate_needed_blocks(QUANTILEWINDOW_TEST_SIZE);
+            calculate_needed_blocks::<BLOCK_SIZE>(QUANTILEWINDOW_TEST_SIZE);
 
         assert_eq!(expected_needed_blocks, needed_blocks);
     }
@@ -1721,7 +1736,7 @@ mod tests {
     #[test]
     fn test_needed_trees_metadata_calc() {
         let needed_blocks = quantilewindow_utils::
-            calculate_needed_blocks(QUANTILEWINDOW_TEST_SIZE);
+            calculate_needed_blocks::<BLOCK_SIZE>(QUANTILEWINDOW_TEST_SIZE);
         let needed_trees_metadata = quantilewindow_tree_utils::
             tree_calculate_metadata(needed_blocks);
 
@@ -1739,13 +1754,13 @@ mod tests {
     fn test_quantilewindow_new() {
         let expected_actual_floor_value = OrderedDouble::from_f64(0.0);
         let expected_window_blocks = quantilewindow_utils::
-            calculate_needed_blocks(QUANTILEWINDOW_TEST_SIZE);
+            calculate_needed_blocks::<BLOCK_SIZE>(QUANTILEWINDOW_TEST_SIZE);
         let expected_queue_length = QUANTILEWINDOW_TEST_SIZE;
         let expected_tree_metadata = quantilewindow_tree_utils::
             tree_calculate_metadata(expected_window_blocks);
         let (expected_leafs_starting_index, expected_tree_length) = expected_tree_metadata;
 
-        let test_window = QuantileWindow::
+        let test_window = QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::
             new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
 
         assert!(test_window.element_count == 0);
@@ -1777,7 +1792,7 @@ mod tests {
     }
 
     #[track_caller]
-    fn test_blocks(blocks_data: &[QuantileWindowBlock]) {
+    fn test_blocks<const BLOCK_SIZE: usize>(blocks_data: &[QuantileWindowBlock<BLOCK_SIZE>]) {
         for block in blocks_data {
             test_block_data_array(&block.data);
             assert!(block.length == 0);
@@ -1808,7 +1823,7 @@ mod tests {
             .map(|x| x as f64)
             .collect::<Vec<f64>>();
 
-        let mut test_window = QuantileWindow::
+        let mut test_window = QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::
             new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
 
         let input_slice = &test_input[0..BLOCK_SIZE];
@@ -1837,8 +1852,9 @@ mod tests {
         assert!(test_window.element_count == QUANTILEWINDOW_TEST_SIZE);
     }
 
-    #[track_caller]
-    fn calculate_blocks_length(block_data: &[QuantileWindowBlock]) -> usize {
+    fn calculate_blocks_length<const BLOCK_SIZE: usize>(
+        block_data: &[QuantileWindowBlock<BLOCK_SIZE>]
+    ) -> usize {
         let mut result = 0;
         for block in block_data {
             result += block.length;
@@ -1854,7 +1870,7 @@ mod tests {
             .map(|_| rng.random_range(0.0..100.0))
             .collect::<Vec<f64>>();
 
-        let mut test_window = QuantileWindow::
+        let mut test_window = QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::
             new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
 
         for input in test_input {
@@ -1867,7 +1883,9 @@ mod tests {
     }
 
     #[track_caller]
-    fn test_blocks_on_sorted(blocks_data: &[QuantileWindowBlock]) {
+    fn test_blocks_on_sorted<const BLOCK_SIZE: usize>(
+        blocks_data: &[QuantileWindowBlock<BLOCK_SIZE>]
+    ) {
         for block in blocks_data {
             assert!(block.data.is_sorted());
         }
@@ -1880,7 +1898,7 @@ mod tests {
             .map(|_| rng.random_range(0.0..100.0))
             .collect::<Vec<f64>>();
 
-        let mut test_window = QuantileWindow::
+        let mut test_window = QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::
             new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
 
         let input_slice = &test_input[0..];
