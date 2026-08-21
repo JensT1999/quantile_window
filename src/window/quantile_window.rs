@@ -299,21 +299,16 @@ impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
 
     #[inline(always)]
     fn tracker_forwards(&mut self) {
-        if (self.tracker + 1) == self.length {
+        self.tracker += 1;
+        if self.tracker == self.length {
             self.ran_out_right = true;
-        } else {
-            self.tracker += 1;
         }
     }
 
     #[inline(always)]
     fn tracker_backwards(&mut self) {
-        if self.ran_out_right {
-            self.tracker = self.length - 1;
-            self.ran_out_right = false;
-        } else {
-            self.tracker -= 1;
-        }
+        self.tracker -= 1;
+        self.ran_out_right = false;
     }
 
     // SAFETY: First of all the predeccessor marks the value of `current_block_tracker` - 1.
@@ -756,6 +751,9 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
 
         self.handle_update_result(update_result);
         self.update_tracked_block();
+
+        // Only visible in debugging or when running cargo --test
+        self.debug_update_window_invariants();
     }
 
     fn update_queue_get_old_value(
@@ -803,7 +801,7 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
                 new_value
             )
         } else {
-            block_slice[old_value_index] = new_value;
+            debug_assert!(block_slice[old_value_index] == new_value);
             old_value_index
         };
 
@@ -1192,6 +1190,41 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
     }
 }
 
+// QuantileWindow Test
+impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
+    QuantileWindow<BLOCK_SIZE, SLICES_PER_BLOCK> {
+
+    fn debug_update_window_invariants(&self) {
+        #[cfg(debug_assertions)]
+        {
+            debug_assert_eq!(self.block_data
+                .iter()
+                .fold(0, |acc, block| {
+                    acc + block.tracker
+                }), self.actual_floor_rank);
+
+            let mut floor_blocks = 0;
+            for (index, block) in self.block_data.iter().enumerate() {
+                debug_assert_eq!(block.ran_out_right, block.tracker == block.length);
+                debug_assert!(!(block.actual_floor_block && block.ran_out_right));
+                debug_assert!(block.data[..block.length]
+                    .windows(2)
+                    .all(|w| w[0] <= w[1]));
+
+                if block.actual_floor_block {
+                    floor_blocks += 1;
+                    debug_assert_eq!(index, self.actual_floor_block_index);
+                }
+            }
+
+            debug_assert_eq!(floor_blocks, 1);
+            debug_assert!(self.actual_floor_block_index < self.block_data.len());
+            debug_assert!(self.invalid_count <= self.element_count);
+        }
+    }
+
+}
+
 // Utils
 mod quantilewindow_utils {
     use std::ptr;
@@ -1222,6 +1255,7 @@ use crate::window::{utils::ordered_double::OrderedDouble};
     ) -> usize {
         debug_assert!(!data.is_empty());
         debug_assert!(old_value_index < data.len());
+        debug_assert!(new_value < data[old_value_index]);
 
         let new_value_index = data.iter().filter(|&&x| x <= new_value).count();
         unsafe {
@@ -1243,6 +1277,7 @@ use crate::window::{utils::ordered_double::OrderedDouble};
     ) -> usize {
         debug_assert!(!data.is_empty());
         debug_assert!(old_value_index < data.len());
+        debug_assert!(new_value > data[old_value_index]);
 
         let new_value_index = data.iter().filter(|&&x| x < new_value).count() - 1;
         unsafe {
@@ -1568,18 +1603,22 @@ mod tests {
 
     // Testing forwards and backwards shift in
     #[test]
-    fn test_backwards_shift_complete_shift() {
-        let input_data = [2.0, 3.0, 4.0, 5.0, 6.0];
+    fn test_forwards_shift_in_landing_front() {
+        let input_data = [5.0, 6.0, 7.0, 8.0];
         let mut test_input = turn_into_ordered_double_vec(&input_data);
 
-        let input_value = 1.0;
+        let input_value = 5.5;
         let test_value = OrderedDouble::from_f64(input_value);
 
         let insert_index = {
-            quantilewindow_utils::shift_in_backwards(&mut test_input, 4, test_value)
+            quantilewindow_utils::shift_in_forwards(
+                &mut test_input,
+                0,
+                test_value
+            )
         };
 
-        let result_data = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let result_data = [5.5, 6.0, 7.0, 8.0];
         let ordered_result_data = turn_into_ordered_double_vec(&result_data);
 
         assert_eq!(insert_index, 0);
@@ -1587,75 +1626,68 @@ mod tests {
     }
 
     #[test]
-    fn test_backwards_shift_middle_shift_in() {
-        let input_data = [2.0, 3.0, 4.0, 5.0, 6.0];
+    fn test_backwards_shift_in_landing_front() {
+        let input_data = [1.0, 2.0, 3.0, 9.0];
         let mut test_input = turn_into_ordered_double_vec(&input_data);
 
-        let input_value = 3.5;
+        let input_value = 0.5;
         let test_value = OrderedDouble::from_f64(input_value);
 
         let insert_index = {
-            quantilewindow_utils::shift_in_backwards(&mut test_input, 4, test_value)
+            quantilewindow_utils::shift_in_backwards(
+                &mut test_input,
+                3,
+                test_value
+            )
         };
 
-        let result_data = [2.0, 3.0, 3.5, 4.0, 5.0];
+        let result_data = [0.5, 1.0, 2.0, 3.0];
         let ordered_result_data = turn_into_ordered_double_vec(&result_data);
 
-        assert_eq!(insert_index, 2);
+        assert_eq!(insert_index, 0);
         assert_eq!(&test_input, &ordered_result_data);
     }
 
     #[test]
-    fn test_backwards_shift_no_shift_in() {
-        let input_data = [2.0, 3.0, 4.0, 5.0, 6.0];
+    fn test_forwards_shift_in_landing_end() {
+        let input_data = [1.0, 2.0, 3.0, 4.0];
         let mut test_input = turn_into_ordered_double_vec(&input_data);
 
-        let input_value = 7.0;
+        let input_value = 9.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
         let insert_index = {
-            quantilewindow_utils::shift_in_backwards(&mut test_input, 4, test_value)
+            quantilewindow_utils::shift_in_forwards(
+                &mut test_input,
+                0,
+                test_value
+            )
         };
 
-        let result_data = [2.0, 3.0, 4.0, 5.0, 7.0];
+        let result_data = [2.0, 3.0, 4.0, 9.0];
         let ordered_result_data = turn_into_ordered_double_vec(&result_data);
 
-        assert_eq!(insert_index, 4);
+        assert_eq!(insert_index, 3);
         assert_eq!(&test_input, &ordered_result_data);
     }
 
     #[test]
-    fn test_forwards_shift_complete_shift() {
-        let input_data = [2.0, 3.0, 4.0, 5.0, 6.0];
+    fn test_backwards_shift_in_landing_end() {
+        let input_data = [1.0, 9.0, 9.0, 9.0];
         let mut test_input = turn_into_ordered_double_vec(&input_data);
 
-        let input_value = 7.0;
+        let input_value = 8.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
         let insert_index = {
-            quantilewindow_utils::shift_in_forwards(&mut test_input, 0, test_value)
+            quantilewindow_utils::shift_in_backwards(
+                &mut test_input,
+                1,
+                test_value
+            )
         };
 
-        let result_data = [3.0, 4.0, 5.0, 6.0, 7.0];
-        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
-
-        assert_eq!(insert_index, 4);
-        assert_eq!(&test_input, &ordered_result_data);
-    }
-
-    #[test]
-    fn test_forwards_shift_middle_shift_in() {
-        let input_data = [2.0, 3.0, 4.0, 5.0, 6.0];
-        let mut test_input = turn_into_ordered_double_vec(&input_data);
-
-        let input_value = 3.5;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        let insert_index = {
-            quantilewindow_utils::shift_in_forwards(&mut test_input, 0, test_value)
-        };
-
-        let result_data = [3.0, 3.5, 4.0, 5.0, 6.0];
+        let result_data = [1.0, 8.0, 9.0, 9.0];
         let ordered_result_data = turn_into_ordered_double_vec(&result_data);
 
         assert_eq!(insert_index, 1);
@@ -1663,18 +1695,68 @@ mod tests {
     }
 
     #[test]
-    fn test_forwards_shift_no_shift_in() {
-        let input_data = [2.0, 3.0, 4.0, 5.0, 6.0];
+    fn test_forwards_shift_in_landing_middle() {
+        let input_data = [1.0, 2.0, 5.0, 6.0];
         let mut test_input = turn_into_ordered_double_vec(&input_data);
 
-        let input_value = 1.0;
+        let input_value = 3.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
         let insert_index = {
-            quantilewindow_utils::shift_in_forwards(&mut test_input, 0, test_value)
+            quantilewindow_utils::shift_in_forwards(
+                &mut test_input,
+                0,
+                test_value
+            )
         };
 
-        let result_data = [1.0, 3.0, 4.0, 5.0, 6.0];
+        let result_data = [2.0, 3.0, 5.0, 6.0];
+        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
+
+        assert_eq!(insert_index, 1);
+        assert_eq!(&test_input, &ordered_result_data);
+    }
+
+    #[test]
+    fn test_backwards_shift_in_landing_middle() {
+        let input_data = [1.0, 4.0, 5.0, 9.0];
+        let mut test_input = turn_into_ordered_double_vec(&input_data);
+
+        let input_value = 2.0;
+        let test_value = OrderedDouble::from_f64(input_value);
+
+        let insert_index = {
+            quantilewindow_utils::shift_in_backwards(
+                &mut test_input,
+                3,
+                test_value
+            )
+        };
+
+        let result_data = [1.0, 2.0, 4.0, 5.0];
+        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
+
+        assert_eq!(insert_index, 1);
+        assert_eq!(&test_input, &ordered_result_data);
+    }
+
+    #[test]
+    fn test_forwards_shift_in_duplicates() {
+        let input_data = [1.0, 3.0, 3.0, 3.0, 9.0];
+        let mut test_input = turn_into_ordered_double_vec(&input_data);
+
+        let input_value = 3.0;
+        let test_value = OrderedDouble::from_f64(input_value);
+
+        let insert_index = {
+            quantilewindow_utils::shift_in_forwards(
+                &mut test_input,
+                0,
+                test_value
+            )
+        };
+
+        let result_data = [3.0, 3.0, 3.0, 3.0, 9.0];
         let ordered_result_data = turn_into_ordered_double_vec(&result_data);
 
         assert_eq!(insert_index, 0);
@@ -1682,51 +1764,28 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
-    fn test_backwards_shift_in_empty_input() {
-        let mut input_data = [];
-
-        let input_value = 1.0;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        quantilewindow_utils::shift_in_backwards(&mut input_data, 0, test_value);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_forwards_shift_in_empty_input() {
-        let mut input_data = [];
-
-        let input_value = 1.0;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        quantilewindow_utils::shift_in_forwards(&mut input_data, 0, test_value);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_backwards_shift_in_old_index_bigger_as_len() {
-        let input_data = [2.0, 3.0, 4.0, 5.0, 6.0];
-        let mut test_input = turn_into_ordered_double_vec(&input_data);
-        let input_value = 1.0;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        quantilewindow_utils::shift_in_backwards(&mut test_input, 5, test_value);
-    }
-
-    #[test]
-    #[should_panic]
-    fn test_forwards_shift_in_old_index_bigger_as_len() {
-        let input_data = [2.0, 3.0, 4.0, 5.0, 6.0];
+    fn test_backwards_shift_in_duplicates() {
+        let input_data = [1.0, 3.0, 3.0, 3.0, 9.0];
         let mut test_input = turn_into_ordered_double_vec(&input_data);
 
-        let input_value = 7.0;
+        let input_value = 3.0;
         let test_value = OrderedDouble::from_f64(input_value);
 
-        quantilewindow_utils::shift_in_forwards(&mut test_input, 5, test_value);
+        let insert_index = {
+            quantilewindow_utils::shift_in_backwards(
+                &mut test_input,
+                4,
+                test_value
+            )
+        };
+
+        let result_data = [1.0, 3.0, 3.0, 3.0, 3.0];
+        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
+
+        assert_eq!(insert_index, 4);
+        assert_eq!(&test_input, &ordered_result_data);
     }
 
-    #[track_caller]
     fn turn_into_ordered_double_vec(input_array: &[f64]) -> Vec<OrderedDouble> {
         input_array
             .iter()
@@ -1764,6 +1823,30 @@ mod tests {
 
         let tree_left_part_length = expected_leafs_starting_index;
         assert!(((tree_left_part_length - 1) % K_ARY) == 0);
+    }
+
+    #[test]
+    fn test_trees_new() {
+        let needed_blocks = quantilewindow_utils::
+            calculate_needed_blocks::<BLOCK_SIZE>(QUANTILEWINDOW_TEST_SIZE);
+
+        let tested_tree = QuantileWindowTree::
+            <QuantileWindowSuccessorTree>::new(needed_blocks);
+
+        let correct_metadata = quantilewindow_tree_utils::
+            tree_calculate_metadata(needed_blocks);
+        assert_eq!(tested_tree.data.len(), correct_metadata.1);
+        assert_eq!(tested_tree.tree_leaves_starting_index, correct_metadata.0);
+
+        tested_tree.data.iter()
+            .for_each(|node| {
+                assert_eq!(node.value, QuantileWindowSuccessorTree::DUMMY_VALUE);
+            });
+
+        let blocks_init_end_index = tested_tree.tree_leaves_starting_index + needed_blocks;
+        tested_tree.data[tested_tree.tree_leaves_starting_index..blocks_init_end_index]
+            .windows(2)
+            .all(|w| w[0].block_index < w[1].block_index);
     }
 
     #[test]
@@ -1863,20 +1946,11 @@ mod tests {
             test_window.add(ordered_representation);
         }
 
-        let result_blocks_length = calculate_blocks_length(&test_window.block_data);
+        let result_blocks_length = test_window.block_data
+            .iter()
+            .fold(0usize, |acc, x| acc + x.length);
         assert!(result_blocks_length == QUANTILEWINDOW_TEST_SIZE);
         assert!(test_window.element_count == QUANTILEWINDOW_TEST_SIZE);
-    }
-
-    fn calculate_blocks_length<const BLOCK_SIZE: usize>(
-        block_data: &[QuantileWindowBlock<BLOCK_SIZE>]
-    ) -> usize {
-        let mut result = 0;
-        for block in block_data {
-            result += block.length;
-        }
-
-        result
     }
 
     #[test]
@@ -1889,22 +1963,16 @@ mod tests {
         let mut test_window = QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::
             new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
 
-        for input in test_input {
-            let ordered_representation = OrderedDouble::from_f64(input);
-            test_window.add(ordered_representation);
-        }
+        test_input.iter()
+            .for_each(|value| {
+                let ordered_representation = OrderedDouble::from_f64(*value);
+                test_window.add(ordered_representation);
+            });
 
         test_window.prepare();
-        test_blocks_on_sorted(&test_window.block_data);
-    }
-
-    #[track_caller]
-    fn test_blocks_on_sorted<const BLOCK_SIZE: usize>(
-        blocks_data: &[QuantileWindowBlock<BLOCK_SIZE>]
-    ) {
-        for block in blocks_data {
-            assert!(block.data.is_sorted());
-        }
+        test_window.block_data
+            .iter()
+            .for_each(|w| assert!(w.data.is_sorted()));
     }
 
     #[test]
@@ -1918,10 +1986,11 @@ mod tests {
             new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
 
         let input_slice = &test_input[0..];
-        for input in input_slice {
-            let ordered_representation = OrderedDouble::from_f64(*input);
-            test_window.add(ordered_representation);
-        }
+        input_slice.iter()
+            .for_each(|value| {
+                let ordered_representation = OrderedDouble::from_f64(*value);
+                test_window.add(ordered_representation);
+            });
 
         test_window.prepare();
 
@@ -1931,7 +2000,8 @@ mod tests {
             test_input.select_nth_unstable_by(expected_floor_rank, |x, y| x.total_cmp(y));
 
         let expected_predeccessor_value =
-            left_side.iter().max_by(|x, y| x.total_cmp(y));
+            left_side.iter()
+                .max_by(|x, y| x.total_cmp(y));
         let result_predeccessor_value = test_window.pred_tree.get_root().value;
         match expected_predeccessor_value {
             Some(value) => {
@@ -1943,14 +2013,15 @@ mod tests {
         }
 
         let expected_successor_value =
-            right_side.iter().min_by(|x, y| x.total_cmp(y));
+            right_side.iter()
+                .min_by(|x, y| x.total_cmp(y));
         let result_successor_value = test_window.succ_tree.get_root().value;
         match expected_successor_value {
             Some(value) => {
                 assert_eq!(result_successor_value, OrderedDouble::from_f64(*value));
             },
             None => {
-                assert!(result_successor_value == PRED_DUMMY_VALUE);
+                assert!(result_successor_value == SUCC_DUMMY_VALUE);
             }
         }
 
