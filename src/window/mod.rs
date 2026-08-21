@@ -4,7 +4,8 @@ mod quantile_window;
 mod utils;
 
 // Needs to be documented
-const WINDOW_SIZE_THRESHHOLD: usize = 10000;
+const WINDOW_SIZE_THRESHHOLD_FOR_SIZE_32: usize = 10000;
+const WINDOW_SIZE_THRESHHOLD_FOR_SIZE_64: usize = 1500000;
 const QUANTILE_EPSILON: f64 = 1e-9;
 
 #[derive(Debug)]
@@ -52,14 +53,20 @@ pub fn rolling_quantile_window(
     window_size: usize,
     quantile: f64
 ) -> Result<Vec<f64>, WindowError> {
-    if window_size <= WINDOW_SIZE_THRESHHOLD {
+    if window_size <= WINDOW_SIZE_THRESHHOLD_FOR_SIZE_32 {
         rolling_quantile_window_generic::<16,1>(
             input_array,
             window_size,
             quantile
         )
-    } else {
+    } else if window_size <= WINDOW_SIZE_THRESHHOLD_FOR_SIZE_64 {
         rolling_quantile_window_generic::<32, 2>(
+            input_array,
+            window_size,
+            quantile
+        )
+    } else {
+        rolling_quantile_window_generic::<64, 4>(
             input_array,
             window_size,
             quantile
