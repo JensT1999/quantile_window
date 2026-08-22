@@ -753,7 +753,9 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
         self.update_tracked_block();
 
         // Only visible in debugging or when running cargo --test
-        self.debug_update_window_invariants();
+        #[cfg(debug_assertions)] {
+            self.debug_update_window_invariants();
+        }
     }
 
     fn update_queue_get_old_value(
@@ -1194,35 +1196,32 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
 impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
     QuantileWindow<BLOCK_SIZE, SLICES_PER_BLOCK> {
 
+    #[cfg(debug_assertions)]
     fn debug_update_window_invariants(&self) {
-        #[cfg(debug_assertions)]
-        {
-            debug_assert_eq!(self.block_data
-                .iter()
-                .fold(0, |acc, block| {
-                    acc + block.tracker
-                }), self.actual_floor_rank);
+        debug_assert_eq!(self.block_data
+            .iter()
+            .fold(0, |acc, block| {
+                acc + block.tracker
+            }), self.actual_floor_rank);
 
-            let mut floor_blocks = 0;
-            for (index, block) in self.block_data.iter().enumerate() {
-                debug_assert_eq!(block.ran_out_right, block.tracker == block.length);
-                debug_assert!(!(block.actual_floor_block && block.ran_out_right));
-                debug_assert!(block.data[..block.length]
-                    .windows(2)
-                    .all(|w| w[0] <= w[1]));
+        let mut floor_blocks = 0;
+        for (index, block) in self.block_data.iter().enumerate() {
+            debug_assert_eq!(block.ran_out_right, block.tracker == block.length);
+            debug_assert!(!(block.actual_floor_block && block.ran_out_right));
+            debug_assert!(block.data[..block.length]
+                .windows(2)
+                .all(|w| w[0] <= w[1]));
 
-                if block.actual_floor_block {
-                    floor_blocks += 1;
-                    debug_assert_eq!(index, self.actual_floor_block_index);
-                }
+            if block.actual_floor_block {
+                floor_blocks += 1;
+                debug_assert_eq!(index, self.actual_floor_block_index);
             }
-
-            debug_assert_eq!(floor_blocks, 1);
-            debug_assert!(self.actual_floor_block_index < self.block_data.len());
-            debug_assert!(self.invalid_count <= self.element_count);
         }
-    }
 
+        debug_assert_eq!(floor_blocks, 1);
+        debug_assert!(self.actual_floor_block_index < self.block_data.len());
+        debug_assert!(self.invalid_count <= self.element_count);
+    }
 }
 
 // Utils
