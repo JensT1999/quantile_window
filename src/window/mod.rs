@@ -8,7 +8,7 @@ const WINDOW_SIZE_THRESHHOLD_FOR_SIZE_32: usize = 10000;
 const WINDOW_SIZE_THRESHHOLD_FOR_SIZE_64: usize = 1500000;
 const QUANTILE_EPSILON: f64 = 1e-9;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum WindowError {
     InputArrayIsEmptyError,
     SizingError,
@@ -36,6 +36,11 @@ impl std::error::Error for WindowError {}
 /// for every possible window position.
 /// Please note: This window will always step one element to the right! The steps are not parameterizable.
 ///
+/// Also note: [`f64::NAN`] will be counted as missing and does not enter the quantile.
+/// In this case the quantile will be calculated from the remaining valid elements.
+/// In explanation: When there are two of one hundred elements equals to [`f64::NAN`] the quantile will
+/// be calculated from the remaining ninety eight elements.
+///
 /// # Returns
 /// A vector containing the calculated quantiles.
 /// Please note: The vector always will be of the size [(input_array.len() - window_size) + 1].
@@ -48,6 +53,36 @@ impl std::error::Error for WindowError {}
 /// * 'quantile' is outside the valid range (['0.0, 1.0']) (['WindowError::InvalidQuantileError'])
 ///
 /// # Example
+///
+/// ```
+/// use quantile_window::rolling_quantile_window;
+///
+/// // 0.5 quantile
+/// let test_input = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+/// let result_quantiles = rolling_quantile_window(&test_input, 3, 0.5).unwrap();
+/// assert_eq!(&result_quantiles, &[2.0, 3.0, 4.0, 5.0]);
+///
+/// // 0.0 quantile
+/// let result_quantiles = rolling_quantile_window(&test_input, 3, 0.0).unwrap();
+/// assert_eq!(&result_quantiles, &[1.0, 2.0, 3.0, 4.0]);
+///
+/// // 1.0 quantile
+/// let result_quantiles = rolling_quantile_window(&test_input, 3, 1.0).unwrap();
+/// assert_eq!(&result_quantiles, &[3.0, 4.0, 5.0, 6.0]);
+///
+/// // NaN example
+/// let test_input = [1.0, 2.0, 3.0, f64::NAN, 5.0, 6.0];
+/// let result_quantiles = rolling_quantile_window(&test_input, 3, 0.5).unwrap();
+/// assert_eq!(&result_quantiles, &[2.0, 2.5, 4.0, 5.5]);
+///
+/// // Full of NaN example
+/// let test_input = [1.0, f64::NAN, f64::NAN, f64::NAN, 5.0, 6.0];
+/// let result_quantiles = rolling_quantile_window(&test_input, 3, 0.5).unwrap();
+/// assert!(!result_quantiles[0].is_nan());
+/// assert!(result_quantiles[1].is_nan());
+/// assert!(!result_quantiles[2].is_nan());
+/// assert!(!result_quantiles[3].is_nan());
+/// ```
 pub fn rolling_quantile_window(
     input_array: &[f64],
     window_size: usize,
@@ -111,4 +146,57 @@ fn valid_quantile(quantile: f64) -> bool {
     let scaled_up = quantile * 100.0;
     let computed = scaled_up - scaled_up.round();
     computed.abs() < QUANTILE_EPSILON
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{window::{rolling_quantile_window_generic, valid_quantile, WindowError}};
+
+    const TESTED_QUANTILES: [(f64, bool); 12] = [
+        (0.01, true), (0.5, true), (0.001, false), (1.0, true), (1.01, false),
+        (0.0, true), (-0.5, false), (-0.01, false), (0.75, true), (0.123, false),
+        (f64::NAN, false), (f64::INFINITY, false)
+    ];
+
+    #[test]
+    fn test_valid_quantile() {
+        TESTED_QUANTILES
+            .iter()
+            .for_each(|(value, valid)| {
+                assert!(valid_quantile(*value) == *valid);
+            });
+    }
+
+    #[test]
+    fn test_rolling_quantile_invalid_input() {
+        let test_input: [f64; 0] = [];
+        let call_result = rolling_quantile_window_generic::<16, 1>(
+            &test_input,
+            128,
+            0.5
+        );
+        assert!(call_result.err().unwrap() == WindowError::InputArrayIsEmptyError);
+
+        let test_input = [1.0, 2.0, 3.0, 4.0, 5.0];
+        let call_result = rolling_quantile_window_generic::<16, 1>(
+            &test_input,
+            0,
+            0.5
+        );
+        assert!(call_result.err().unwrap() == WindowError::SizingError);
+
+        let call_result = rolling_quantile_window_generic::<16, 1>(
+            &test_input,
+            16,
+            0.5
+        );
+        assert!(call_result.err().unwrap() == WindowError::SizingError);
+
+        let call_result = rolling_quantile_window_generic::<16, 1>(
+            &test_input,
+            3,
+            1.1
+        );
+        assert!(call_result.err().unwrap() == WindowError::InvalidQuantileError);
+    }
 }
