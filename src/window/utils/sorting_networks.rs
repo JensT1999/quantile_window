@@ -1,4 +1,6 @@
-pub fn sorting_network_16<T>(data: &mut [T])
+pub const SORTING_NETWORK_SIZE_16: usize = 16;
+
+pub fn sorting_network_16<T>(data: &mut [T; SORTING_NETWORK_SIZE_16])
 where
     T: Ord +
     Copy {
@@ -78,14 +80,37 @@ fn sorting_network_cas<T>(data: &mut [T], index1: usize, index2: usize)
 where
     T: Ord +
     Copy {
+    debug_assert!(
+        index1 < data.len() &&
+        index2 < data.len()
+    );
+
+    // SAFETY: both indices are in bounds of `data`. `data` holds exactly the number of
+    // elements the network is built for - the callers are the `sorting_network_*`
+    // functions, each of which takes a fixed-size array and passes only literal indices
+    // below that length. The bound therefore holds by construction, not by a check here.
     let data_tup = unsafe {
         (*data.get_unchecked(index1), *data.get_unchecked(index2))
     };
 
     if data_tup.0 > data_tup.1 {
+        // SAFETY: as above - the same two indices were just read in bounds, and neither
+        // they nor the length of `data` changed in between.
         unsafe {
             *data.get_unchecked_mut(index1) = data_tup.1;
             *data.get_unchecked_mut(index2) = data_tup.0;
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::window::utils::sorting_networks::sorting_network_16;
+
+    #[test]
+    fn test_sorting_network_16() {
+        let mut test_input = [3, 1, 7, 2, 8, 5, 4, 6, 10, 16, 12, 11, 15, 14, 9, 13];
+        sorting_network_16(&mut test_input);
+        assert!(test_input.is_sorted());
     }
 }

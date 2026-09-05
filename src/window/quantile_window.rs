@@ -280,7 +280,7 @@ use crate::window::utils::{
     ordered_double::OrderedDouble, sorting_networks,
 };
 
-const SORTING_NETWORK_SIZE: usize = 16;
+const SORTING_NETWORK_SIZE: usize = sorting_networks::SORTING_NETWORK_SIZE_16;
 const K_ARY: usize = 8;
 
 const PLACE_HOLDER_VALUE: OrderedDouble = OrderedDouble::MAX;
@@ -327,14 +327,13 @@ struct QuantileWindowBlock<const BLOCK_SIZE: usize> {
 impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
 
     fn sort<const SLICES_PER_BLOCK: usize>(&mut self) {
-        let mut current_slice = 0;
-        while current_slice < SLICES_PER_BLOCK {
-            let slice_start_index = current_slice * SORTING_NETWORK_SIZE;
-            let slice_end_index = slice_start_index + SORTING_NETWORK_SIZE;
-            let block_slice = &mut self.data[slice_start_index..slice_end_index];
-
-            sorting_networks::sorting_network_16(block_slice);
-            current_slice += 1;
+        // The remainder is always empty: a `const` block in `rolling_window` guarantees at
+        // compile time that `BLOCK_SIZE` is a multiple of `SORTING_NETWORK_SIZE` and that
+        // `SLICES_PER_BLOCK * SORTING_NETWORK_SIZE == BLOCK_SIZE`, so the chunks cover the
+        // whole block and there are exactly `SLICES_PER_BLOCK` of them.
+        let chunks = self.data.as_chunks_mut::<SORTING_NETWORK_SIZE>().0;
+        for chunk in chunks {
+            sorting_networks::sorting_network_16(chunk);
         }
 
         self.k_way_merge_slices::<SLICES_PER_BLOCK>();
