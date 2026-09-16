@@ -356,7 +356,7 @@ fn build_benchmark_result(
     valid_durations.sort();
 
     let valid_len = valid_durations.len();
-    let median_duration = if valid_len % 2 == 0 {
+    let median_duration = if valid_len.is_multiple_of(2) {
         let middle = valid_len / 2;
         let index_a = middle - 1;
         let index_b = middle;
@@ -373,7 +373,7 @@ fn build_benchmark_result(
     let min_duration = valid_durations[0];
 
     BenchmarkResult {
-        window_size: window_size,
+        window_size,
         input_length: length,
         median: median_duration,
         max: max_duration,
@@ -389,8 +389,7 @@ mod utils {
         input_length: usize
     ) -> f64 {
         let base_m_per_s = input_length as f64 / base_value;
-        let m_per_s = base_m_per_s / 1000000.0;
-        m_per_s
+        base_m_per_s / 1000000.0
     }
 
     #[inline(always)]
@@ -528,7 +527,7 @@ fn start_window_size_dist_benchmark(
         for data_distributon in WINDOW_SIZE_DIST_BENCH_BENCHED_DISTRIBUTIONS {
             let case_config = BenchmarkCaseConfiguration {
                 distribution: &data_distributon,
-                window_size: window_size
+                window_size
             };
 
             let benchmark_result = run_benchmark(
@@ -598,7 +597,7 @@ fn start_quantile_benchmark(
             iterations: STD_BENCH_ITERATIONS,
             first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT,
             length: QUANTILE_BENCH_BENCHED_LENGTH,
-            quantile: quantile
+            quantile
         };
 
         let case_config = BenchmarkCaseConfiguration {

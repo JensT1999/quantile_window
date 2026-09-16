@@ -78,7 +78,7 @@ mod test {
     fn test_ordered_double_ord_b() {
         let mut values = [3.0, 2.0, 1.0, 9.0, 7.0]
             .into_iter()
-            .map(|x| OrderedDouble::from_f64(x))
+            .map(OrderedDouble::from_f64)
             .collect::<Vec<OrderedDouble>>();
 
         assert!(!values.is_sorted());
@@ -90,7 +90,7 @@ mod test {
     fn test_ordered_double_nan() {
         let mut values = [3.0, 2.0, -f64::NAN, f64::NAN, 7.0]
             .into_iter()
-            .map(|x| OrderedDouble::from_f64(x))
+            .map(OrderedDouble::from_f64)
             .collect::<Vec<OrderedDouble>>();
 
         assert!(!values.is_sorted());
@@ -105,7 +105,7 @@ mod test {
     fn test_ordered_double_sorting_order() {
         let mut values = [3.0, f64::INFINITY, 0.0, -0.0, -3.0, -f64::INFINITY, f64::NAN, -f64::NAN]
             .into_iter()
-            .map(|x| OrderedDouble::from_f64(x))
+            .map(OrderedDouble::from_f64)
             .collect::<Vec<OrderedDouble>>();
 
         assert!(!values.is_sorted());

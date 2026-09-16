@@ -2089,7 +2089,7 @@ mod tests {
         assert!(test_window.actual_floor_rank == 0);
         assert!(test_window.actual_floor_value == expected_actual_floor_value);
         assert!(test_window.actual_floor_block_index == 0);
-        assert!(test_window.interpolation == false);
+        assert!(!test_window.interpolation);
         assert!(test_window.actual_block == 0);
 
         assert!(!test_window.block_data.is_empty());
@@ -2117,8 +2117,8 @@ mod tests {
             assert!(block.length == 0);
             assert!(block.update_index == 0);
             assert!(block.tracker == 0);
-            assert!(block.actual_floor_block == false);
-            assert!(block.ran_out_right == false);
+            assert!(!block.actual_floor_block);
+            assert!(!block.ran_out_right);
         }
     }
 

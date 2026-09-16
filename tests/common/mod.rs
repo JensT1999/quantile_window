@@ -17,7 +17,7 @@ pub fn naive_quantile_gen(
             .filter(|x| !x.is_nan())
             .collect::<Vec<f64>>();
 
-        if nan_handled_array.len() == 0 {
+        if nan_handled_array.is_empty() {
             result_vec.push(f64::NAN);
             continue;
         }
@@ -76,7 +76,8 @@ pub fn assert_quantile_results(
                     *i1,
                     *i2,
                     window,
-                    quantile);
+                    quantile
+                );
             }
         } else {
             if i1.is_nan() && i2.is_nan() {
@@ -88,7 +89,8 @@ pub fn assert_quantile_results(
                 *i1,
                 *i2,
                 window,
-                quantile);
+                quantile
+            );
         }
     }
 }
@@ -187,7 +189,7 @@ pub fn process_and_assert_results(
     quantile: f64
 ) {
     let naive_result = naive_quantile_gen(
-        &test_data,
+        test_data,
         window_size,
         quantile
     );
@@ -233,14 +235,14 @@ fn process_results_and_assert_naive_results<const BLOCK_SIZE: usize, const SLICE
     naive_result: &[f64]
 ) {
     let test_result = quantile_window::rolling_quantile_window_generic::<BLOCK_SIZE, SLICES_PER_BLOCK>(
-        &test_data,
+        test_data,
         window_size,
         quantile
     ).unwrap();
 
     let test_label = format!("{} - block size: {}", test_label, BLOCK_SIZE);
     assert_quantile_results(
-        &naive_result,
+        naive_result,
         &test_result,
         &test_label,
         window_size,
