@@ -492,7 +492,7 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
         let needed_blocks = quantilewindow_utils::calculate_needed_blocks::<BLOCK_SIZE>(window_size);
         let needed_queue_size = window_size;
 
-        let result_window = QuantileWindow {
+        Self {
             element_count: 0,
             invalid_count: 0,
             quantile,
@@ -514,9 +514,7 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
             queue_data: vec![OrderedDouble::default(); needed_queue_size],
             pred_tree: QuantileWindowTree::<QuantileWindowPredeccessorTree>::new(needed_blocks),
             succ_tree: QuantileWindowTree::<QuantileWindowSuccessorTree>::new(needed_blocks),
-        };
-
-        result_window
+        }
     }
 
     fn add(&mut self, value: OrderedDouble) {
@@ -1051,10 +1049,8 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
             }
         }
 
-        if IS_FLOOR_BLOCK {
-            if deleted_index == old_tracker + 1 {
-                update_succ_tree = true;
-            }
+        if IS_FLOOR_BLOCK && deleted_index == old_tracker + 1 {
+            update_succ_tree = true;
         }
 
         if new_index < new_tracker {
@@ -1072,10 +1068,8 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
             }
         }
 
-        if IS_FLOOR_BLOCK {
-            if new_index == new_tracker + 1 {
-                update_succ_tree = true;
-            }
+        if IS_FLOOR_BLOCK && new_index == new_tracker + 1 {
+            update_succ_tree = true;
         }
 
         if new_tracker == actual_block_len {
@@ -1188,14 +1182,14 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
     ) -> f64 {
         let floor_value: f64 = self.actual_floor_value.to_f64();
         if !self.interpolation {
-            return floor_value;
+            floor_value
         } else {
             let successor_value = self.succ_tree.get_root().value;
             let successor_value = successor_value.to_f64();
 
-            return quantilewindow_utils::calculate_interpolated_quantile(self.searched_rank,
+            quantilewindow_utils::calculate_interpolated_quantile(self.searched_rank,
                 floor_value,
-                successor_value);
+                successor_value)
         }
     }
 
@@ -1317,12 +1311,16 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
     }
 
     #[inline(always)]
-    fn empty(&self) -> bool {
+    fn empty(
+        &self
+    ) -> bool {
         self.valid_size() == 0
     }
 
     #[inline(always)]
-    fn valid_size(&self) -> usize {
+    fn valid_size(
+        &self
+    ) -> usize {
         self.element_count - self.invalid_count
     }
 }
@@ -1448,7 +1446,20 @@ use crate::window::{utils::ordered_double::OrderedDouble};
     }
 
     #[inline(always)]
-    pub fn is_invalid_value(tested_value: OrderedDouble) -> bool {
+    pub fn map_to_corresponding_value(
+        value: f64
+    ) -> OrderedDouble {
+        if value.is_nan() {
+            OrderedDouble::MAX
+        } else {
+            OrderedDouble::from_f64(value)
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_invalid_value(
+        tested_value: OrderedDouble
+    ) -> bool {
         tested_value == OrderedDouble::MAX
     }
 }
@@ -1472,12 +1483,17 @@ mod quantilewindow_tree_utils {
     }
 
     #[inline(always)]
-    pub fn tree_child_index(position: usize, child_num: usize) -> usize {
+    pub fn tree_child_index(
+        position: usize,
+        child_num: usize
+    ) -> usize {
         (position * K_ARY) + child_num
     }
 
     #[inline(always)]
-    pub fn tree_parent_index(position: usize) -> usize {
+    pub fn tree_parent_index(
+        position: usize
+    ) -> usize {
         (position - 1) / K_ARY
     }
 }
@@ -1742,12 +1758,16 @@ where
     }
 
     #[inline(always)]
-    fn get_root(&self) -> QuantileWindowTreeNode {
+    fn get_root(
+        &self
+    ) -> QuantileWindowTreeNode {
         self.data[0]
     }
 
     #[inline(always)]
-    fn got_invalid_root(&self) -> bool {
+    fn got_invalid_root(
+        &self
+    ) -> bool {
         self.get_root().value == T::DUMMY_VALUE
     }
 }
@@ -1761,7 +1781,7 @@ pub fn rolling_window<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
     const {
         assert!(
             BLOCK_SIZE > 0 &&
-            BLOCK_SIZE % SORTING_NETWORK_SIZE == 0 &&
+            BLOCK_SIZE.is_multiple_of(SORTING_NETWORK_SIZE) &&
             SLICES_PER_BLOCK * SORTING_NETWORK_SIZE == BLOCK_SIZE
         );
     }
@@ -1774,12 +1794,7 @@ pub fn rolling_window<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
         .iter()
         .fold(QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::new(window_size, quantile),
             |mut window, value| {
-                let input_value = if value.is_nan() {
-                    OrderedDouble::MAX
-                } else {
-                    OrderedDouble::from_f64(*value)
-                };
-
+                let input_value = quantilewindow_utils::map_to_corresponding_value(*value);
                 window.add(input_value);
                 window
             });
@@ -1791,11 +1806,7 @@ pub fn rolling_window<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
     input_slice
         .iter()
         .for_each(|value| {
-            let input_value = if value.is_nan() {
-                OrderedDouble::MAX
-            } else {
-                OrderedDouble::from_f64(*value)
-            };
+            let input_value = quantilewindow_utils::map_to_corresponding_value(*value);
             window.update_window(input_value);
 
             let result = window.adjust_and_result_quantile();

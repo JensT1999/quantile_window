@@ -126,12 +126,13 @@ pub fn rolling_quantile_window_generic<const BLOCK_SIZE: usize, const SLICES_PER
         return Err(WindowError::InvalidQuantileError);
     }
 
-    let result_vec = quantile_window::rolling_window::<BLOCK_SIZE, SLICES_PER_BLOCK>(
-        input_array,
-        window_size,
-        quantile
-    );
-    Ok(result_vec)
+    Ok(
+        quantile_window::rolling_window::<BLOCK_SIZE, SLICES_PER_BLOCK>(
+            input_array,
+            window_size,
+            quantile
+        )
+    )
 }
 
 fn valid_quantile(quantile: f64) -> bool {
@@ -139,7 +140,7 @@ fn valid_quantile(quantile: f64) -> bool {
         return false;
     }
 
-    if quantile < 0.0 || quantile > 1.0 {
+    if !(0.0..=1.0).contains(&quantile) {
         return false;
     }
 

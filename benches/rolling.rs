@@ -104,7 +104,7 @@ impl Display for DataDistribution {
         let output_string = match self {
             DataDistribution::Continuous { data_bounds} => {
                 format!(
-                    "continous: bounds {}..{}",
+                    "continuous: bounds {}..{}",
                     data_bounds.lowest_possible_value,
                     data_bounds.highest_possible_value
                 )
@@ -209,7 +209,7 @@ impl DataDistributor for DataDistribution {
         &self
     ) -> String {
         match self {
-            DataDistribution::Continuous { data_bounds: _ } => String::from("continous"),
+            DataDistribution::Continuous { data_bounds: _ } => String::from("continuous"),
             DataDistribution::Trend { trend_ratio: _, noise_scale: _ } => String::from("trend"),
             DataDistribution::NaN { data_bounds: _, nan_ratio: _ } => String::from("nan"),
             DataDistribution::SinusWave { frequency: _, amplitude: _, noise_bounds: _ } => String::from("sinus_wave")
@@ -460,7 +460,7 @@ fn start_length_benchmark(
     }
 
     let benchmark_header = format!(
-        "Benchmark configuration - window size {} quantile {} distribution: {}",
+        "Benchmark configuration - window size: {} quantile: {} distribution: {}",
         LENGTH_BENCH_BENCHED_WINDOW_SIZE,
         LENGTH_BENCH_BENCHED_QUANTILE,
         LENGTH_BENCH_STD_BENCHED_DISTRIBUTION.short_description()
