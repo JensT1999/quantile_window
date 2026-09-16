@@ -43,14 +43,13 @@ impl std::error::Error for WindowError {}
 ///
 /// # Returns
 /// A vector containing the calculated quantiles.
-/// Please note: The vector always will be of the size [(input_array.len() - window_size) + 1].
+/// Please note: The vector always will be of the size [(`input_array.len()` - `window_size`) + 1].
 ///
 /// # Errors
-///
-/// Returns a ['WindowError'] if:
-/// * 'input_array' is empty (['WindowError::InputArrayIsEmptyError']).
-/// * 'window_size' is 0 or larger than 'input_array.len()' (['WindowError::SizingError']).
-/// * 'quantile' is outside the valid range (['0.0, 1.0']) (['WindowError::InvalidQuantileError'])
+/// Returns a [`WindowError`] if:
+/// * `input_array` is empty ([`WindowError::InputArrayIsEmptyError`]).
+/// * `window_size` is 0 or larger than `input_array.len()` ([`WindowError::SizingError`]).
+/// * `quantile` is outside the valid range ([`0.0, 1.0`]) ([`WindowError::InvalidQuantileError`]).
 ///
 /// # Example
 ///
@@ -109,11 +108,62 @@ pub fn rolling_quantile_window(
     }
 }
 
+/// Computes a rolling quantile over an input slice/array.
+///
+/// Uses an optimized rolling window mechanism to return a vector containing the calculated quantile
+/// for every possible window position.
+/// Please note: This window will always step one element to the right! The steps are not parameterizable.
+///
+/// Also note: [`f64::NAN`] will be counted as missing and does not enter the quantile.
+/// In this case the quantile will be calculated from the remaining valid elements.
+/// In explanation: When there are two of one hundred elements equals to [`f64::NAN`] the quantile will
+/// be calculated from the remaining ninety eight elements.
+///
+/// This function includes two special parameters: `BLOCK_SIZE` and `SLICES_PER_BLOCK` as const generics.
+/// Both parameters are interdependent, and compilation will fail if they do not match.
+///
+/// # Constraints
+/// - `BLOCK_SIZE` must be greater than zero.
+/// - `BLOCK_SIZE` must be a value that is divisible by the size of the underlying sorting network.
+/// - In this specific implementation, the sorting network has a size of 16; consequently, `BLOCK_SIZE` must be a
+/// multiple of 16.
+/// - `SLICES_PER_BLOCK` is therefore derived by dividing `BLOCK_SIZE` by 16.
+///
+/// `BLOCK_SIZE` is a trade-off rather than a "smaller is better" choice. A larger block makes the linear search
+/// inside a block more expensive, but reduces the number of blocks and therefore the depth of the underlying
+/// tournament trees. The function [`rolling_quantile_window`] therefore uses thresholds to determine the right
+/// `BLOCK_SIZE` for the specific `window_size`.
+///
+/// # Returns
+/// A vector containing the calculated quantiles.
+/// Please note: The vector always will be of the size [(`input_array.len()` - `window_size`) + 1].
+///
+/// # Errors
+/// Returns a [`WindowError`] if:
+/// * `input_array` is empty ([`WindowError::InputArrayIsEmptyError`]).
+/// * `window_size` is 0 or larger than `input_array.len()` ([`WindowError::SizingError`]).
+/// * `quantile` is outside the valid range ([`0.0, 1.0`]) ([`WindowError::InvalidQuantileError`]).
+///
+/// # Example
+///
+/// ```
+/// use quantile_window::rolling_quantile_window_generic;
+///
+/// // 0.5 quantile
+/// let test_input = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+/// let result_quantiles = rolling_quantile_window_generic::<16, 1>(&test_input, 3, 0.5).unwrap();
+/// assert_eq!(&result_quantiles, &[2.0, 3.0, 4.0, 5.0]);
+///
+/// // 0.5 quantile
+/// let test_input = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+/// let result_quantiles = rolling_quantile_window_generic::<64, 4>(&test_input, 3, 0.5).unwrap();
+/// assert_eq!(&result_quantiles, &[2.0, 3.0, 4.0, 5.0]);
+/// ```
 pub fn rolling_quantile_window_generic<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
     input_array: &[f64],
     window_size: usize,
     quantile: f64
-    ) -> Result<Vec<f64>, WindowError> {
+) -> Result<Vec<f64>, WindowError> {
     if input_array.is_empty() {
         return Err(WindowError::InputArrayIsEmptyError);
     }
@@ -135,6 +185,7 @@ pub fn rolling_quantile_window_generic<const BLOCK_SIZE: usize, const SLICES_PER
     )
 }
 
+#[inline(always)]
 fn valid_quantile(quantile: f64) -> bool {
     if quantile.is_nan() || quantile.is_infinite() {
         return false;
