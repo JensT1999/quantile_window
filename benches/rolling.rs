@@ -342,14 +342,13 @@ impl BenchmarkResult {
 
 struct BenchmarkHarnessConfiguration {
     iterations: usize,
-    first_valid_result: usize,
-    length: usize,
-    quantile: f64,
+    first_valid_result: usize
 }
 
 struct BenchmarkCaseConfiguration<'a> {
-    distribution: &'a DataDistribution,
+    test_data: &'a [f64],
     window_size: usize,
+    quantile: f64
 }
 
 trait BenchmarkedFunction {
@@ -441,26 +440,22 @@ impl BenchmarkedFunction for Benchmark128BlockSize {
     }
 }
 
-fn run_std_benchmark(
-    rng: &mut StdRng,
+fn run_benchmark<B>(
     harness_config: &BenchmarkHarnessConfiguration,
     case_config: &BenchmarkCaseConfiguration
-) -> Result<BenchmarkResult, WindowError> {
-    let test_data = case_config
-        .distribution
-        .generate_distribution(rng, harness_config.length, case_config.window_size);
-
-    let mut benchmark_results = run_benchmark_iterations::<BenchmarkStdDispatcher>(
+) -> Result<BenchmarkResult, WindowError> where
+    B: BenchmarkedFunction {
+    let mut benchmark_results = run_benchmark_iterations::<B>(
         harness_config.iterations,
-        &test_data,
+        case_config.test_data,
         case_config.window_size,
-        harness_config.quantile
+        case_config.quantile
     )?;
 
     Ok(
         build_benchmark_result(
             &mut benchmark_results,
-            harness_config.length,
+            case_config.test_data.len(),
             harness_config.first_valid_result
         )
     )
@@ -602,22 +597,27 @@ fn start_benchmarks(
 fn start_length_benchmark(
     rng: &mut StdRng
 ) -> Result<(), WindowError> {
+    let harness_config = BenchmarkHarnessConfiguration {
+        iterations: STD_BENCH_ITERATIONS,
+        first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT
+    };
+
     let mut benchmark_results = Vec::with_capacity(LENGTH_BENCH_BENCHED_INPUT_LENGHTS.len());
     for input_length in LENGTH_BENCH_BENCHED_INPUT_LENGHTS {
-        let harness_config = BenchmarkHarnessConfiguration {
-            iterations: STD_BENCH_ITERATIONS,
-            first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT,
-            length: input_length,
+        let test_data = LENGTH_BENCH_STD_BENCHED_DISTRIBUTION
+            .generate_distribution(
+                rng,
+                input_length,
+                LENGTH_BENCH_BENCHED_WINDOW_SIZE
+            );
+
+        let case_config = BenchmarkCaseConfiguration {
+            test_data: &test_data,
+            window_size: LENGTH_BENCH_BENCHED_WINDOW_SIZE,
             quantile: LENGTH_BENCH_BENCHED_QUANTILE
         };
 
-        let case_config = BenchmarkCaseConfiguration {
-            distribution: &LENGTH_BENCH_STD_BENCHED_DISTRIBUTION,
-            window_size: LENGTH_BENCH_BENCHED_WINDOW_SIZE
-        };
-
-        let benchmark_result = run_std_benchmark(
-            rng,
+        let benchmark_result = run_benchmark::<BenchmarkStdDispatcher>(
             &harness_config,
             &case_config
         )?;
@@ -672,9 +672,7 @@ fn start_window_size_dist_benchmark(
 ) -> Result<(), WindowError> {
     let harness_config = BenchmarkHarnessConfiguration {
         iterations: STD_BENCH_ITERATIONS,
-        first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT,
-        length: WINDOW_SIZE_DIST_BENCH_BENCHED_LENGTH,
-        quantile: WINDOW_SIZE_DIST_BENCH_BENCHED_QUANTILE
+        first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT
     };
 
     let benchmark_header = format!(
@@ -691,13 +689,20 @@ fn start_window_size_dist_benchmark(
         );
 
         for data_distributon in WINDOW_SIZE_DIST_BENCH_BENCHED_DISTRIBUTIONS {
+            let test_data = data_distributon
+                .generate_distribution(
+                    rng,
+                    WINDOW_SIZE_DIST_BENCH_BENCHED_LENGTH,
+                    window_size
+                );
+
             let case_config = BenchmarkCaseConfiguration {
-                distribution: &data_distributon,
-                window_size
+                test_data: &test_data,
+                window_size,
+                quantile: WINDOW_SIZE_DIST_BENCH_BENCHED_QUANTILE
             };
 
-            let benchmark_result = run_std_benchmark(
-                rng,
+            let benchmark_result = run_benchmark::<BenchmarkStdDispatcher>(
                 &harness_config,
                 &case_config
             )?;
@@ -757,22 +762,27 @@ fn build_window_size_dist_benchmark_table(
 fn start_quantile_benchmark(
     rng: &mut StdRng
 ) -> Result<(), WindowError> {
+    let harness_config = BenchmarkHarnessConfiguration {
+        iterations: STD_BENCH_ITERATIONS,
+        first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT
+    };
+
+    let test_data = QUANTILE_BENCH_BENCHED_DISTRIBUTION
+        .generate_distribution(
+            rng,
+            QUANTILE_BENCH_BENCHED_LENGTH,
+            QUANTILE_BENCH_BENCHED_WINDOW_SIZE
+        );
+
     let mut benchmark_results = Vec::with_capacity(QUANTILE_BENCH_BENCHED_QUANTILES.len());
     for quantile in QUANTILE_BENCH_BENCHED_QUANTILES {
-        let harness_config = BenchmarkHarnessConfiguration {
-            iterations: STD_BENCH_ITERATIONS,
-            first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT,
-            length: QUANTILE_BENCH_BENCHED_LENGTH,
+        let case_config = BenchmarkCaseConfiguration {
+            test_data: &test_data,
+            window_size: QUANTILE_BENCH_BENCHED_WINDOW_SIZE,
             quantile
         };
 
-        let case_config = BenchmarkCaseConfiguration {
-            distribution: &QUANTILE_BENCH_BENCHED_DISTRIBUTION,
-            window_size: QUANTILE_BENCH_BENCHED_WINDOW_SIZE
-        };
-
-        let benchmark_result = run_std_benchmark(
-            rng,
+        let benchmark_result = run_benchmark::<BenchmarkStdDispatcher>(
             &harness_config,
             &case_config
         )?;
@@ -826,6 +836,11 @@ fn build_quantile_benchmark_table(
 fn start_block_sizes_benchmark(
     rng: &mut StdRng
 ) -> Result<(), WindowError> {
+    let harness_config = BenchmarkHarnessConfiguration {
+        iterations: STD_BENCH_ITERATIONS,
+        first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT
+    };
+
     for data_distribution in BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS {
         let mut benchmark_results_per_window = Vec::with_capacity(
             BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.len()
@@ -839,37 +854,43 @@ fn start_block_sizes_benchmark(
                     window_size
                 );
 
+            let case_config = BenchmarkCaseConfiguration {
+                test_data: &test_data,
+                window_size,
+                quantile: BLOCK_SIZES_BENCH_BENCHED_QUANTILE
+            };
+
             let mut benchmark_results = vec![];
 
             // 16 as block size
             benchmark_results.push(
-                run_block_size_benchmark::<Benchmark16BlockSize>(
-                    &test_data,
-                    window_size
+                run_benchmark::<Benchmark16BlockSize>(
+                    &harness_config,
+                    &case_config
                 )?
             );
 
             // 32 as block size
             benchmark_results.push(
-                run_block_size_benchmark::<Benchmark32BlockSize>(
-                    &test_data,
-                    window_size
+                run_benchmark::<Benchmark32BlockSize>(
+                    &harness_config,
+                    &case_config
                 )?
             );
 
             // 64 as block size
             benchmark_results.push(
-                run_block_size_benchmark::<Benchmark64BlockSize>(
-                    &test_data,
-                    window_size
+                run_benchmark::<Benchmark64BlockSize>(
+                    &harness_config,
+                    &case_config
                 )?
             );
 
             // 128 as block size
             benchmark_results.push(
-                run_block_size_benchmark::<Benchmark128BlockSize>(
-                    &test_data,
-                    window_size
+                run_benchmark::<Benchmark128BlockSize>(
+                    &harness_config,
+                    &case_config
                 )?
             );
 
@@ -897,27 +918,6 @@ fn start_block_sizes_benchmark(
     }
 
     Ok(())
-}
-
-fn run_block_size_benchmark<B>(
-    test_data: &[f64],
-    window_size: usize,
-) -> Result<BenchmarkResult, WindowError> where
-    B: BenchmarkedFunction {
-    let mut benchmark_results = run_benchmark_iterations::<B>(
-        STD_BENCH_ITERATIONS,
-        test_data,
-        window_size,
-        BLOCK_SIZES_BENCH_BENCHED_QUANTILE
-    )?;
-
-    Ok(
-        build_benchmark_result(
-            &mut benchmark_results,
-            test_data.len(),
-            STD_INDEX_OF_FIRST_VALID_RESULT
-        )
-    )
 }
 
 fn build_block_size_benchmark_table_header() -> String {
