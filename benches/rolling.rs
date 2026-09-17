@@ -1,6 +1,10 @@
-use std::{error::Error, fmt::{Display}, time::{Duration, Instant}};
+use std::{env, error::Error, fmt::Display, time::{Duration, Instant}};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use quantile_window::WindowError;
+
+// Different benchmarks
+const STD_BENCHMARK_KEY: &str = "std_bench";
+const BLOCK_SIZES_BENCHMARK_KEY: &str = "block_sizes_bench";
 
 // Basic harness configuration
 const BENCHED_DATA_SEED: u64 = 42;
@@ -55,19 +59,26 @@ const QUANTILE_BENCH_BENCHED_DISTRIBUTION: DataDistribution = DataDistribution::
 };
 const QUANTILE_BENCH_BENCHED_WINDOW_SIZE: usize = 1000;
 
-trait DataDistributor {
+// Basic block sizes benchmark configuration
+const BLOCK_SIZES_BENCH_BENCHED_LENGTH: usize = 20_000_000;
+const BLOCK_SIZES_BENCH_BENCHED_QUANTILE: f64 = 0.5;
+const BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS: [DataDistribution; 2] = [
+    DataDistribution::Continuous {
+        data_bounds: DataBounds { lowest_possible_value: -1000.0, highest_possible_value: 1000.0 }
+    },
 
-    fn generate_distribution(
-        &self,
-        rng: &mut StdRng,
-        length: usize,
-        window_size: usize
-    ) -> Vec<f64>;
-
-    fn short_description(
-        &self
-    ) -> String;
-}
+    DataDistribution::Trend {
+        trend_ratio: 50.0,
+        noise_scale: 200.0
+    }
+];
+const BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES: [usize; 6] = [
+    100, 1_000, 10_000, 100_000, 1_000_000, 2_000_000
+];
+const BLOCK_SIZES_BENCH_BENCHED_BLOCK_SIZES: [usize; 4] = [
+    16, 32, 64, 128
+];
+const METRICS_OUTPUT_COL_FACTOR: usize = 15;
 
 struct DataBounds {
     lowest_possible_value: f64,
@@ -142,7 +153,7 @@ impl Display for DataDistribution {
     }
 }
 
-impl DataDistributor for DataDistribution {
+impl DataDistribution {
 
     fn generate_distribution(
         &self,
@@ -218,29 +229,10 @@ impl DataDistributor for DataDistribution {
 }
 
 struct BenchmarkResult {
-    window_size: usize,
     input_length: usize,
     median: Duration,
     max: Duration,
     min: Duration,
-}
-
-impl Display for BenchmarkResult {
-
-    fn fmt(
-        &self, f: &mut std::fmt::Formatter<'_>
-    ) -> std::fmt::Result {
-        let max_formatted = self.formatted_slowest_metric();
-        let median_formatted = self.formatted_median_metric();
-        let min_formatted = self.formatted_fastest_metric();
-        let spread_formatted = self.formatted_spread_metric();
-
-        write!(
-            f,
-            "w={} - {} - {} - {} - {}",
-            self.window_size, max_formatted, median_formatted, min_formatted, spread_formatted
-        )
-    }
 }
 
 impl BenchmarkResult {
@@ -249,39 +241,102 @@ impl BenchmarkResult {
     fn formatted_slowest_metric(
         &self
     ) -> String {
-        let max_f64 = self.max.as_secs_f64();
-        let max_m_per_s = utils::calc_m_per_s(max_f64, self.input_length);
-        utils::format_metrics_output("slowest", max_f64, max_m_per_s)
+        utils::format_metrics_output(
+            "slowest",
+            self.get_slowest(),
+            self.get_slowest_m_per_s()
+        )
+    }
+
+    #[inline(always)]
+    fn get_slowest(
+        &self
+    ) -> f64 {
+        self.max.as_secs_f64()
+    }
+
+    #[inline(always)]
+    fn get_slowest_m_per_s(
+        &self
+    ) -> f64 {
+        utils::calc_m_per_s(
+            self.get_slowest(),
+            self.input_length
+        )
     }
 
     #[inline(always)]
     fn formatted_median_metric(
         &self
     ) -> String {
-        let median_f64 = self.median.as_secs_f64();
-        let median_m_per_s = utils::calc_m_per_s(median_f64, self.input_length);
-        utils::format_metrics_output("median", median_f64, median_m_per_s)
+        utils::format_metrics_output(
+            "median",
+            self.get_median(),
+            self.get_median_m_per_s()
+        )
+    }
+
+    #[inline(always)]
+    fn get_median(
+        &self
+    ) -> f64 {
+        self.median.as_secs_f64()
+    }
+
+    #[inline(always)]
+    fn get_median_m_per_s(
+        &self
+    ) -> f64 {
+        utils::calc_m_per_s(
+            self.get_median(),
+            self.input_length
+        )
     }
 
     #[inline(always)]
     fn formatted_fastest_metric(
         &self
     ) -> String {
-        let min_f64 = self.min.as_secs_f64();
-        let min_m_per_s = utils::calc_m_per_s(min_f64, self.input_length);
-        utils::format_metrics_output("fastest", min_f64, min_m_per_s)
+        utils::format_metrics_output(
+            "fastest",
+            self.get_fastest(),
+            self.get_fastest_m_per_s()
+        )
+    }
+
+    #[inline(always)]
+    fn get_fastest(
+        &self
+    ) -> f64 {
+        self.min.as_secs_f64()
+    }
+
+    #[inline(always)]
+    fn get_fastest_m_per_s(
+        &self
+    ) -> f64 {
+        utils::calc_m_per_s(
+            self.get_fastest(),
+            self.input_length
+        )
     }
 
     #[inline(always)]
     fn formatted_spread_metric(
         &self
     ) -> String {
-        let spread = utils::calc_spread_percent(
+        format!("spread: {:.2}%", self.get_spread())
+    }
+
+    #[inline(always)]
+    fn get_spread(
+        &self
+    ) -> f64 {
+        utils::calc_spread_percent(
             self.max.as_secs_f64(),
             self.median.as_secs_f64(),
             self.min.as_secs_f64()
-        );
-        format!("spread: {:.2}%", spread)
+        )
     }
 }
 
@@ -297,7 +352,96 @@ struct BenchmarkCaseConfiguration<'a> {
     window_size: usize,
 }
 
-fn run_benchmark(
+trait BenchmarkedFunction {
+
+    fn benchmark(
+        test_data: &[f64],
+        window_size: usize,
+        quantile: f64
+    ) -> Result<Vec<f64>, WindowError>;
+}
+
+struct BenchmarkStdDispatcher;
+impl BenchmarkedFunction for BenchmarkStdDispatcher {
+
+    fn benchmark(
+        test_data: &[f64],
+        window_size: usize,
+        quantile: f64
+    ) -> Result<Vec<f64>, WindowError> {
+        quantile_window::rolling_quantile_window(
+            test_data,
+            window_size,
+            quantile
+        )
+    }
+}
+
+struct Benchmark16BlockSize;
+impl BenchmarkedFunction for Benchmark16BlockSize {
+
+    fn benchmark(
+        test_data: &[f64],
+        window_size: usize,
+        quantile: f64
+    ) -> Result<Vec<f64>, WindowError> {
+        quantile_window::rolling_quantile_window_generic::<16,1>(
+            test_data,
+            window_size,
+            quantile
+        )
+    }
+}
+
+struct Benchmark32BlockSize;
+impl BenchmarkedFunction for Benchmark32BlockSize {
+
+    fn benchmark(
+        test_data: &[f64],
+        window_size: usize,
+        quantile: f64
+    ) -> Result<Vec<f64>, WindowError> {
+        quantile_window::rolling_quantile_window_generic::<32,2>(
+            test_data,
+            window_size,
+            quantile
+        )
+    }
+}
+
+struct Benchmark64BlockSize;
+impl BenchmarkedFunction for Benchmark64BlockSize {
+
+    fn benchmark(
+        test_data: &[f64],
+        window_size: usize,
+        quantile: f64
+    ) -> Result<Vec<f64>, WindowError> {
+        quantile_window::rolling_quantile_window_generic::<64,4>(
+            test_data,
+            window_size,
+            quantile
+        )
+    }
+}
+
+struct Benchmark128BlockSize;
+impl BenchmarkedFunction for Benchmark128BlockSize {
+
+    fn benchmark(
+        test_data: &[f64],
+        window_size: usize,
+        quantile: f64
+    ) -> Result<Vec<f64>, WindowError> {
+        quantile_window::rolling_quantile_window_generic::<128,8>(
+            test_data,
+            window_size,
+            quantile
+        )
+    }
+}
+
+fn run_std_benchmark(
     rng: &mut StdRng,
     harness_config: &BenchmarkHarnessConfiguration,
     case_config: &BenchmarkCaseConfiguration
@@ -306,37 +450,33 @@ fn run_benchmark(
         .distribution
         .generate_distribution(rng, harness_config.length, case_config.window_size);
 
-    let mut benchmark_results = run_benchmark_iterations(
+    let mut benchmark_results = run_benchmark_iterations::<BenchmarkStdDispatcher>(
         harness_config.iterations,
         &test_data,
         case_config.window_size,
         harness_config.quantile
     )?;
 
-    let benchmark_result = build_benchmark_result(
-        &mut benchmark_results,
-        case_config.window_size,
-        harness_config.length,
-        harness_config.first_valid_result
-    );
-
-    Ok(benchmark_result)
+    Ok(
+        build_benchmark_result(
+            &mut benchmark_results,
+            harness_config.length,
+            harness_config.first_valid_result
+        )
+    )
 }
 
-fn run_benchmark_iterations(
+fn run_benchmark_iterations<B>(
     iterations: usize,
     test_data: &[f64],
     window_size: usize,
     quantile: f64
-) -> Result<Vec<Duration>, WindowError> {
+) -> Result<Vec<Duration>, WindowError> where
+    B: BenchmarkedFunction {
     let mut result_vec = vec![];
     for _index in 0..iterations {
         let instant = Instant::now();
-        let result = quantile_window::rolling_quantile_window(
-            test_data,
-            window_size,
-            quantile
-        )?;
+        let result = B::benchmark(test_data, window_size, quantile)?;
         result_vec.push(instant.elapsed());
         std::hint::black_box(result);
     }
@@ -346,7 +486,6 @@ fn run_benchmark_iterations(
 
 fn build_benchmark_result(
     input_data: &mut [Duration],
-    window_size: usize,
     length: usize,
     first_valid_result: usize
 ) -> BenchmarkResult {
@@ -373,7 +512,6 @@ fn build_benchmark_result(
     let min_duration = valid_durations[0];
 
     BenchmarkResult {
-        window_size,
         input_length: length,
         median: median_duration,
         max: max_duration,
@@ -412,23 +550,51 @@ mod utils {
 }
 
 fn main() -> Result<(), Box<dyn Error>>{
-    start_benchmarks()?;
+    let args = env::args().collect::<Vec<String>>();
+
+    let std_benchmark = args.contains(&STD_BENCHMARK_KEY.to_string());
+    let block_sizes_benchmark = args.contains(&BLOCK_SIZES_BENCHMARK_KEY.to_string());
+
+    if std_benchmark || block_sizes_benchmark {
+        start_benchmarks(
+            std_benchmark,
+            block_sizes_benchmark
+        )?;
+    } else {
+        println!(
+            "Select one of the following benchmarks as argument: Standard - {} or Block sizes - {}",
+            STD_BENCHMARK_KEY,
+            BLOCK_SIZES_BENCHMARK_KEY
+        );
+    }
+
     Ok(())
 }
 
-fn start_benchmarks() -> Result<(), WindowError> {
+fn start_benchmarks(
+    std_benchmark: bool,
+    block_sizes_benchmark:bool
+) -> Result<(), WindowError> {
     let mut rng = StdRng::seed_from_u64(BENCHED_DATA_SEED);
 
-    // Input length benchmark
-    start_length_benchmark(&mut rng)?;
-    println!();
+    if std_benchmark {
+        // Input length benchmark
+        start_length_benchmark(&mut rng)?;
+        println!();
 
-    // Window size + different distributions benchmark
-    start_window_size_dist_benchmark(&mut rng)?;
-    println!();
+        // Window size + different distributions benchmark
+        start_window_size_dist_benchmark(&mut rng)?;
+        println!();
 
-    // Quantiles benchmark
-    start_quantile_benchmark(&mut rng)?;
+        // Quantiles benchmark
+        start_quantile_benchmark(&mut rng)?;
+        println!();
+    }
+
+    if block_sizes_benchmark {
+        // Block sizes benchmark
+        start_block_sizes_benchmark(&mut rng)?;
+    }
 
     Ok(())
 }
@@ -450,7 +616,7 @@ fn start_length_benchmark(
             window_size: LENGTH_BENCH_BENCHED_WINDOW_SIZE
         };
 
-        let benchmark_result = run_benchmark(
+        let benchmark_result = run_std_benchmark(
             rng,
             &harness_config,
             &case_config
@@ -530,7 +696,7 @@ fn start_window_size_dist_benchmark(
                 window_size
             };
 
-            let benchmark_result = run_benchmark(
+            let benchmark_result = run_std_benchmark(
                 rng,
                 &harness_config,
                 &case_config
@@ -605,7 +771,7 @@ fn start_quantile_benchmark(
             window_size: QUANTILE_BENCH_BENCHED_WINDOW_SIZE
         };
 
-        let benchmark_result = run_benchmark(
+        let benchmark_result = run_std_benchmark(
             rng,
             &harness_config,
             &case_config
@@ -654,4 +820,174 @@ fn build_quantile_benchmark_table(
             )
         })
         .collect::<Vec<String>>()
+}
+
+/// Special benchmark to determine the thresholds for function [`quantile_window::rolling_quantile_window`]
+fn start_block_sizes_benchmark(
+    rng: &mut StdRng
+) -> Result<(), WindowError> {
+    for data_distribution in BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS {
+        let mut benchmark_results_per_window = Vec::with_capacity(
+            BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.len()
+        );
+
+        for window_size in BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES {
+            let test_data = data_distribution
+                .generate_distribution(
+                    rng,
+                    BLOCK_SIZES_BENCH_BENCHED_LENGTH,
+                    window_size
+                );
+
+            let mut benchmark_results = vec![];
+
+            // 16 as block size
+            benchmark_results.push(
+                run_block_size_benchmark::<Benchmark16BlockSize>(
+                    &test_data,
+                    window_size
+                )?
+            );
+
+            // 32 as block size
+            benchmark_results.push(
+                run_block_size_benchmark::<Benchmark32BlockSize>(
+                    &test_data,
+                    window_size
+                )?
+            );
+
+            // 64 as block size
+            benchmark_results.push(
+                run_block_size_benchmark::<Benchmark64BlockSize>(
+                    &test_data,
+                    window_size
+                )?
+            );
+
+            // 128 as block size
+            benchmark_results.push(
+                run_block_size_benchmark::<Benchmark128BlockSize>(
+                    &test_data,
+                    window_size
+                )?
+            );
+
+            benchmark_results_per_window.push(benchmark_results);
+        }
+
+        let benchmark_header = format!(
+            "Benchmark configuration - input length: {} distribution: {}",
+            BLOCK_SIZES_BENCH_BENCHED_LENGTH,
+            data_distribution
+        );
+        println!("{}", benchmark_header);
+
+        let benchmark_table_header = build_block_size_benchmark_table_header();
+        println!("{}", benchmark_table_header);
+
+        let benchmark_table_divider_line = build_block_size_benchmark_table_divider_line();
+        println!("{}", benchmark_table_divider_line);
+
+        build_block_size_benchmark_table(&benchmark_results_per_window)
+            .iter()
+            .for_each(|result| println!("{}", result));
+
+        println!();
+    }
+
+    Ok(())
+}
+
+fn run_block_size_benchmark<B>(
+    test_data: &[f64],
+    window_size: usize,
+) -> Result<BenchmarkResult, WindowError> where
+    B: BenchmarkedFunction {
+    let mut benchmark_results = run_benchmark_iterations::<B>(
+        STD_BENCH_ITERATIONS,
+        test_data,
+        window_size,
+        BLOCK_SIZES_BENCH_BENCHED_QUANTILE
+    )?;
+
+    Ok(
+        build_benchmark_result(
+            &mut benchmark_results,
+            test_data.len(),
+            STD_INDEX_OF_FIRST_VALID_RESULT
+        )
+    )
+}
+
+fn build_block_size_benchmark_table_header() -> String {
+    BLOCK_SIZES_BENCH_BENCHED_BLOCK_SIZES
+        .iter()
+        .fold(format!(
+            "{:<METRICS_OUTPUT_COL_FACTOR$}|",
+            "window"
+        ),
+            |mut acc, size| {
+                acc.push_str(
+                    &format!(
+                        "{:^METRICS_OUTPUT_COL_FACTOR$}|",
+                        size
+                    )
+                );
+
+                acc
+            })
+}
+
+fn build_block_size_benchmark_table_divider_line() -> String {
+    (0..=BLOCK_SIZES_BENCH_BENCHED_BLOCK_SIZES.len())
+        .fold(String::new(),
+            |mut acc, _| {
+                acc.push_str(&"-".repeat(METRICS_OUTPUT_COL_FACTOR));
+                acc.push('+');
+
+                acc
+            })
+}
+
+fn build_block_size_benchmark_table(
+    benchmark_results: &[Vec<BenchmarkResult>]
+) -> Vec<String> {
+    assert!(
+        BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.len() == benchmark_results.len(),
+        "It appears that arrays of different lengths were entered."
+    );
+
+    BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES
+        .iter()
+        .zip(benchmark_results.iter())
+        .fold(Vec::with_capacity(BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.len()),
+            |mut acc, item| {
+                let benchmark_specific_results = item.1;
+                let result_str = benchmark_specific_results
+                    .iter()
+                    .fold(format!(
+                        "{:<METRICS_OUTPUT_COL_FACTOR$}|",
+                        item.0
+                    ),
+                        |mut acc, res| {
+                            let cell_data = format!(
+                                "{:.1} ({:.1}%)",
+                                res.get_median_m_per_s(),
+                                res.get_spread()
+                            );
+
+                            acc.push_str(
+                                &format!(
+                                    "{:^METRICS_OUTPUT_COL_FACTOR$}|",
+                                    cell_data
+                                )
+                            );
+
+                            acc
+                        });
+
+                acc.push(result_str);
+                acc
+            })
 }
