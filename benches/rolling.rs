@@ -8,7 +8,7 @@ const BLOCK_SIZES_BENCHMARK_KEY: &str = "block_sizes_bench";
 
 // Basic harness configuration
 const BENCHED_DATA_SEED: u64 = 42;
-const STD_BENCH_ITERATIONS: usize = 10;
+const STD_BENCH_ITERATIONS: usize = 5;
 const STD_INDEX_OF_FIRST_VALID_RESULT: usize = 1;
 
 // Basic length benchmark configuration
@@ -60,23 +60,28 @@ const QUANTILE_BENCH_BENCHED_DISTRIBUTION: DataDistribution = DataDistribution::
 const QUANTILE_BENCH_BENCHED_WINDOW_SIZE: usize = 1000;
 
 // Basic block sizes benchmark configuration
-const BLOCK_SIZES_BENCH_BENCHED_LENGTH: usize = 20_000_000;
+const BLOCK_SIZES_BENCH_BENCHED_LENGTH: usize = 100_000_000;
 const BLOCK_SIZES_BENCH_BENCHED_QUANTILE: f64 = 0.5;
-const BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS: [DataDistribution; 2] = [
-    DataDistribution::Continuous {
-        data_bounds: DataBounds { lowest_possible_value: -1000.0, highest_possible_value: 1000.0 }
-    },
+const BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS: [DataDistribution; 1] = [
+    // DataDistribution::Continuous {
+    //     data_bounds: DataBounds { lowest_possible_value: -1000.0, highest_possible_value: 1000.0 }
+    // },
 
     DataDistribution::Trend {
         trend_ratio: 50.0,
         noise_scale: 200.0
     }
 ];
-const BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES: [usize; 6] = [
-    100, 1_000, 10_000, 100_000, 1_000_000, 2_000_000
+const BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES: [usize; 0] = [
 ];
-const BLOCK_SIZES_BENCH_BENCHED_BLOCK_SIZES: [usize; 4] = [
-    16, 32, 64, 128
+const BLOCK_SIZES_BENCH_WINDOW_SIZE_STARTING_EXP: usize = 21; // 6
+const BLOCK_SIZES_BENCH_WINDOW_SIZE_CAP_EXP: usize = 24;
+const BLOCK_SIZES_BENCH_BENCHED_DISPATCHERS: [BenchmarkDispatchers; 5] = [
+    BenchmarkDispatchers::BlockSize16Dispatcher,
+    BenchmarkDispatchers::BlockSize32Dispatcher,
+    BenchmarkDispatchers::BlockSize64Dispatcher,
+    BenchmarkDispatchers::BlockSize128Dispatcher,
+    BenchmarkDispatchers::StdDispatcher
 ];
 const METRICS_OUTPUT_COL_FACTOR: usize = 15;
 
@@ -351,6 +356,62 @@ struct BenchmarkCaseConfiguration<'a> {
     quantile: f64
 }
 
+enum BenchmarkDispatchers {
+    StdDispatcher,
+    BlockSize16Dispatcher,
+    BlockSize32Dispatcher,
+    BlockSize64Dispatcher,
+    BlockSize128Dispatcher
+}
+
+impl BenchmarkDispatchers {
+
+    fn dispatch(
+        &self,
+        harness_config: &BenchmarkHarnessConfiguration,
+        case_config: &BenchmarkCaseConfiguration
+    ) -> Result<BenchmarkResult, WindowError> {
+        match self {
+            BenchmarkDispatchers::StdDispatcher => run_benchmark::<BenchmarkStdDispatcher>(
+                harness_config,
+                case_config
+            ),
+
+            BenchmarkDispatchers::BlockSize16Dispatcher => run_benchmark::<Benchmark16BlockSize>(
+                harness_config,
+                case_config
+            ),
+
+            BenchmarkDispatchers::BlockSize32Dispatcher => run_benchmark::<Benchmark32BlockSize>(
+                harness_config,
+                case_config
+            ),
+
+            BenchmarkDispatchers::BlockSize64Dispatcher => run_benchmark::<Benchmark64BlockSize>(
+                harness_config,
+                case_config
+            ),
+
+            BenchmarkDispatchers::BlockSize128Dispatcher => run_benchmark::<Benchmark128BlockSize>(
+                harness_config,
+                case_config
+            ),
+        }
+    }
+
+    fn get_tag(
+        &self
+    ) -> String {
+        match self {
+            BenchmarkDispatchers::StdDispatcher => BenchmarkStdDispatcher::get_tag(),
+            BenchmarkDispatchers::BlockSize16Dispatcher => Benchmark16BlockSize::get_tag(),
+            BenchmarkDispatchers::BlockSize32Dispatcher => Benchmark32BlockSize::get_tag(),
+            BenchmarkDispatchers::BlockSize64Dispatcher => Benchmark64BlockSize::get_tag(),
+            BenchmarkDispatchers::BlockSize128Dispatcher => Benchmark128BlockSize::get_tag()
+        }
+    }
+}
+
 trait BenchmarkedFunction {
 
     fn benchmark(
@@ -358,6 +419,8 @@ trait BenchmarkedFunction {
         window_size: usize,
         quantile: f64
     ) -> Result<Vec<f64>, WindowError>;
+
+    fn get_tag() -> String;
 }
 
 struct BenchmarkStdDispatcher;
@@ -373,6 +436,10 @@ impl BenchmarkedFunction for BenchmarkStdDispatcher {
             window_size,
             quantile
         )
+    }
+
+    fn get_tag() -> String {
+        String::from("std")
     }
 }
 
@@ -390,6 +457,10 @@ impl BenchmarkedFunction for Benchmark16BlockSize {
             quantile
         )
     }
+
+    fn get_tag() -> String {
+        String::from("16")
+    }
 }
 
 struct Benchmark32BlockSize;
@@ -405,6 +476,10 @@ impl BenchmarkedFunction for Benchmark32BlockSize {
             window_size,
             quantile
         )
+    }
+
+    fn get_tag() -> String {
+        String::from("32")
     }
 }
 
@@ -422,6 +497,10 @@ impl BenchmarkedFunction for Benchmark64BlockSize {
             quantile
         )
     }
+
+    fn get_tag() -> String {
+        String::from("64")
+    }
 }
 
 struct Benchmark128BlockSize;
@@ -437,6 +516,10 @@ impl BenchmarkedFunction for Benchmark128BlockSize {
             window_size,
             quantile
         )
+    }
+
+    fn get_tag() -> String {
+        String::from("128")
     }
 }
 
@@ -841,58 +924,40 @@ fn start_block_sizes_benchmark(
         first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT
     };
 
+    let window_sizes = if BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.is_empty() {
+        generate_window_sizes_for_block_size_benchmark()
+    } else {
+        BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.to_vec()
+    };
+
     for data_distribution in BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS {
         let mut benchmark_results_per_window = Vec::with_capacity(
-            BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.len()
+            window_sizes.len()
         );
 
-        for window_size in BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES {
+        for window_size in &window_sizes {
             let test_data = data_distribution
                 .generate_distribution(
                     rng,
                     BLOCK_SIZES_BENCH_BENCHED_LENGTH,
-                    window_size
+                    *window_size
                 );
 
             let case_config = BenchmarkCaseConfiguration {
                 test_data: &test_data,
-                window_size,
+                window_size: *window_size,
                 quantile: BLOCK_SIZES_BENCH_BENCHED_QUANTILE
             };
 
             let mut benchmark_results = vec![];
-
-            // 16 as block size
-            benchmark_results.push(
-                run_benchmark::<Benchmark16BlockSize>(
-                    &harness_config,
-                    &case_config
-                )?
-            );
-
-            // 32 as block size
-            benchmark_results.push(
-                run_benchmark::<Benchmark32BlockSize>(
-                    &harness_config,
-                    &case_config
-                )?
-            );
-
-            // 64 as block size
-            benchmark_results.push(
-                run_benchmark::<Benchmark64BlockSize>(
-                    &harness_config,
-                    &case_config
-                )?
-            );
-
-            // 128 as block size
-            benchmark_results.push(
-                run_benchmark::<Benchmark128BlockSize>(
-                    &harness_config,
-                    &case_config
-                )?
-            );
+            for benched_dispatchers in BLOCK_SIZES_BENCH_BENCHED_DISPATCHERS {
+                benchmark_results.push(
+                    benched_dispatchers.dispatch(
+                        &harness_config,
+                        &case_config
+                    )?
+                );
+            }
 
             benchmark_results_per_window.push(benchmark_results);
         }
@@ -910,7 +975,10 @@ fn start_block_sizes_benchmark(
         let benchmark_table_divider_line = build_block_size_benchmark_table_divider_line();
         println!("{}", benchmark_table_divider_line);
 
-        build_block_size_benchmark_table(&benchmark_results_per_window)
+        build_block_size_benchmark_table(
+            &window_sizes,
+            &benchmark_results_per_window
+        )
             .iter()
             .for_each(|result| println!("{}", result));
 
@@ -920,18 +988,24 @@ fn start_block_sizes_benchmark(
     Ok(())
 }
 
+fn generate_window_sizes_for_block_size_benchmark() -> Vec<usize> {
+    (BLOCK_SIZES_BENCH_WINDOW_SIZE_STARTING_EXP..=BLOCK_SIZES_BENCH_WINDOW_SIZE_CAP_EXP)
+        .map(|exp| 2usize.pow(exp as u32) + 1)
+        .collect::<Vec<usize>>()
+}
+
 fn build_block_size_benchmark_table_header() -> String {
-    BLOCK_SIZES_BENCH_BENCHED_BLOCK_SIZES
+    BLOCK_SIZES_BENCH_BENCHED_DISPATCHERS
         .iter()
         .fold(format!(
             "{:<METRICS_OUTPUT_COL_FACTOR$}|",
             "window"
         ),
-            |mut acc, size| {
+            |mut acc, dispatcher| {
                 acc.push_str(
                     &format!(
                         "{:^METRICS_OUTPUT_COL_FACTOR$}|",
-                        size
+                        dispatcher.get_tag()
                     )
                 );
 
@@ -940,7 +1014,7 @@ fn build_block_size_benchmark_table_header() -> String {
 }
 
 fn build_block_size_benchmark_table_divider_line() -> String {
-    (0..=BLOCK_SIZES_BENCH_BENCHED_BLOCK_SIZES.len())
+    (0..=BLOCK_SIZES_BENCH_BENCHED_DISPATCHERS.len())
         .fold(String::new(),
             |mut acc, _| {
                 acc.push_str(&"-".repeat(METRICS_OUTPUT_COL_FACTOR));
@@ -951,17 +1025,18 @@ fn build_block_size_benchmark_table_divider_line() -> String {
 }
 
 fn build_block_size_benchmark_table(
+    window_sizes: &[usize],
     benchmark_results: &[Vec<BenchmarkResult>]
 ) -> Vec<String> {
     assert!(
-        BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.len() == benchmark_results.len(),
+        window_sizes.len() == benchmark_results.len(),
         "It appears that arrays of different lengths were entered."
     );
 
-    BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES
+    window_sizes
         .iter()
         .zip(benchmark_results.iter())
-        .fold(Vec::with_capacity(BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.len()),
+        .fold(Vec::with_capacity(window_sizes.len()),
             |mut acc, item| {
                 let benchmark_specific_results = item.1;
                 let result_str = benchmark_specific_results

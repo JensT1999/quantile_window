@@ -1,11 +1,10 @@
 use std::fmt::Display;
 
+use crate::window::quantile_window::std_block_sizes::{self, StdBlockSizes};
+
 mod quantile_window;
 mod utils;
 
-// Needs to be documented
-const WINDOW_SIZE_THRESHHOLD_FOR_SIZE_32: usize = 10000;
-const WINDOW_SIZE_THRESHHOLD_FOR_SIZE_64: usize = 1500000;
 const QUANTILE_EPSILON: f64 = 1e-9;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -87,20 +86,30 @@ pub fn rolling_quantile_window(
     window_size: usize,
     quantile: f64
 ) -> Result<Vec<f64>, WindowError> {
-    if window_size <= WINDOW_SIZE_THRESHHOLD_FOR_SIZE_32 {
-        rolling_quantile_window_generic::<16,1>(
+    let b16_metadata = StdBlockSizes::B16.calculate_metadata(window_size);
+    let b32_metadata = StdBlockSizes::B32.calculate_metadata(window_size);
+    let b64_metadata = StdBlockSizes::B64.calculate_metadata(window_size);
+
+    let need_b64 = b64_metadata.tree_buffer_length() <= b16_metadata.tree_buffer_length()
+        && b64_metadata.tree_buffer_length() <= b32_metadata.tree_buffer_length()
+        && b16_metadata.needed_blocks() > std_block_sizes::MIN_BLOCKS_FOR_B64;
+
+    if need_b64 {
+        return rolling_quantile_window_generic::<64, 4>(
             input_array,
             window_size,
             quantile
-        )
-    } else if window_size <= WINDOW_SIZE_THRESHHOLD_FOR_SIZE_64 {
-        rolling_quantile_window_generic::<32, 2>(
+        );
+    }
+
+    if b16_metadata.tree_buffer_length() <= b32_metadata.tree_buffer_length() {
+        rolling_quantile_window_generic::<16, 1>(
             input_array,
             window_size,
             quantile
         )
     } else {
-        rolling_quantile_window_generic::<64, 4>(
+        rolling_quantile_window_generic::<32, 2>(
             input_array,
             window_size,
             quantile

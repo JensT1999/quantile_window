@@ -277,7 +277,8 @@
 use std::{marker::PhantomData};
 
 use crate::window::utils::{
-    ordered_double::OrderedDouble, sorting_networks,
+    ordered_double::OrderedDouble,
+    sorting_networks,
 };
 
 const SORTING_NETWORK_SIZE: usize = sorting_networks::SORTING_NETWORK_SIZE_16;
@@ -1361,7 +1362,7 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
 mod quantilewindow_utils {
     use std::ptr;
 
-use crate::window::{utils::ordered_double::OrderedDouble};
+    use crate::window::{utils::ordered_double::OrderedDouble};
 
     #[inline(always)]
     pub fn calculate_needed_blocks<const BLOCK_SIZE: usize>(
@@ -1772,7 +1773,76 @@ where
     }
 }
 
-// Main function
+pub mod std_block_sizes {
+    use crate::window::quantile_window::{
+        K_ARY,
+        quantilewindow_tree_utils::tree_calculate_metadata,
+        quantilewindow_utils::calculate_needed_blocks
+    };
+
+    pub const MIN_BLOCKS_FOR_B64: usize = K_ARY.pow(6);
+
+    pub struct BlockSizeMetaData {
+        needed_blocks: usize,
+        needed_tree_buffer_length: usize
+    }
+
+    impl BlockSizeMetaData {
+
+        #[inline(always)]
+        pub fn needed_blocks(
+            &self
+        ) -> usize {
+            self.needed_blocks
+        }
+
+        #[inline(always)]
+        pub fn tree_buffer_length(
+            &self
+        ) -> usize {
+            self.needed_tree_buffer_length
+        }
+    }
+
+    pub enum StdBlockSizes {
+        B16,
+        B32,
+        B64
+    }
+
+    impl StdBlockSizes {
+
+        pub fn calculate_metadata(
+            &self,
+            window_size: usize
+        ) -> BlockSizeMetaData {
+            match self {
+                StdBlockSizes::B16 => {
+                    let needed_blocks = calculate_needed_blocks::<16>(window_size);
+                    let needed_tree_buffer_length = tree_calculate_metadata(needed_blocks).1;
+
+                    BlockSizeMetaData { needed_blocks, needed_tree_buffer_length }
+                },
+
+                StdBlockSizes::B32 => {
+                    let needed_blocks = calculate_needed_blocks::<32>(window_size);
+                    let needed_tree_buffer_length = tree_calculate_metadata(needed_blocks).1;
+
+                    BlockSizeMetaData { needed_blocks, needed_tree_buffer_length }
+                },
+
+                StdBlockSizes::B64 => {
+                    let needed_blocks = calculate_needed_blocks::<64>(window_size);
+                    let needed_tree_buffer_length = tree_calculate_metadata(needed_blocks).1;
+
+                    BlockSizeMetaData { needed_blocks, needed_tree_buffer_length }
+                }
+            }
+        }
+    }
+}
+
+// Main functions
 pub fn rolling_window<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
     input_array: &[f64],
     window_size: usize,
