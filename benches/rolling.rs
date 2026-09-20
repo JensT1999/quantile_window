@@ -1,4 +1,4 @@
-use std::{env, error::Error, fmt::Display, time::{Duration, Instant}};
+use std::{env, error::Error, fmt::Display, ops::{Range}, time::{Duration, Instant}};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use quantile_window::WindowError;
 
@@ -60,7 +60,6 @@ const QUANTILE_BENCH_BENCHED_DISTRIBUTION: DataDistribution = DataDistribution::
 const QUANTILE_BENCH_BENCHED_WINDOW_SIZE: usize = 1000;
 
 // Basic block sizes benchmark configuration
-const BLOCK_SIZES_BENCH_BENCHED_LENGTH: usize = 100_000_000;
 const BLOCK_SIZES_BENCH_BENCHED_QUANTILE: f64 = 0.5;
 const BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS: [DataDistribution; 1] = [
     // DataDistribution::Continuous {
@@ -72,10 +71,13 @@ const BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS: [DataDistribution; 1] = [
         noise_scale: 200.0
     }
 ];
-const BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES: [usize; 0] = [
+const BLOCK_SIZES_BENCH_BENCHED_RANGE_LENGTH: usize = 1;
+const BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES: [Range<usize>; 3] = [
+    (6..21), (21..25), (26..27)
 ];
-const BLOCK_SIZES_BENCH_WINDOW_SIZE_STARTING_EXP: usize = 21; // 6
-const BLOCK_SIZES_BENCH_WINDOW_SIZE_CAP_EXP: usize = 24;
+const BLOCK_SIZES_BENCH_BENCHED_CORRESP_LENGTHS: [usize; 3] = [
+    20_000_000, 100_000_000, 670_000_000
+];
 const BLOCK_SIZES_BENCH_BENCHED_DISPATCHERS: [BenchmarkDispatchers; 5] = [
     BenchmarkDispatchers::BlockSize16Dispatcher,
     BenchmarkDispatchers::BlockSize32Dispatcher,
@@ -629,18 +631,23 @@ mod utils {
 
 fn main() -> Result<(), Box<dyn Error>>{
     let args = env::args().collect::<Vec<String>>();
+    let mut rng = StdRng::seed_from_u64(BENCHED_DATA_SEED);
 
-    let std_benchmark = args.contains(&STD_BENCHMARK_KEY.to_string());
-    let block_sizes_benchmark = args.contains(&BLOCK_SIZES_BENCHMARK_KEY.to_string());
+    let std_benchmark_start = args.contains(&STD_BENCHMARK_KEY.to_string());
+    if std_benchmark_start {
+        std_benchmarks(&mut rng)?;
+    }
 
-    if std_benchmark || block_sizes_benchmark {
-        start_benchmarks(
-            std_benchmark,
-            block_sizes_benchmark
+    let block_sizes_benchmark_start = args.contains(&BLOCK_SIZES_BENCHMARK_KEY.to_string());
+    if block_sizes_benchmark_start {
+        start_block_sizes_benchmark(
+            &mut rng
         )?;
-    } else {
+    }
+
+    if !std_benchmark_start && !block_sizes_benchmark_start {
         println!(
-            "Select one of the following benchmarks as argument: Standard - {} or Block sizes - {}",
+            "Select one of the following benchmarks as argument: Standard - {} or Block sizes - {} (needs arg)",
             STD_BENCHMARK_KEY,
             BLOCK_SIZES_BENCHMARK_KEY
         );
@@ -649,30 +656,20 @@ fn main() -> Result<(), Box<dyn Error>>{
     Ok(())
 }
 
-fn start_benchmarks(
-    std_benchmark: bool,
-    block_sizes_benchmark:bool
+fn std_benchmarks(
+    rng: &mut StdRng
 ) -> Result<(), WindowError> {
-    let mut rng = StdRng::seed_from_u64(BENCHED_DATA_SEED);
+    // Input length benchmark
+    start_length_benchmark(rng)?;
+    println!();
 
-    if std_benchmark {
-        // Input length benchmark
-        start_length_benchmark(&mut rng)?;
-        println!();
+    // Window size + different distributions benchmark
+    start_window_size_dist_benchmark(rng)?;
+    println!();
 
-        // Window size + different distributions benchmark
-        start_window_size_dist_benchmark(&mut rng)?;
-        println!();
-
-        // Quantiles benchmark
-        start_quantile_benchmark(&mut rng)?;
-        println!();
-    }
-
-    if block_sizes_benchmark {
-        // Block sizes benchmark
-        start_block_sizes_benchmark(&mut rng)?;
-    }
+    // Quantiles benchmark
+    start_quantile_benchmark(rng)?;
+    println!();
 
     Ok(())
 }
@@ -919,17 +916,28 @@ fn build_quantile_benchmark_table(
 fn start_block_sizes_benchmark(
     rng: &mut StdRng
 ) -> Result<(), WindowError> {
+    assert!(
+        BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES.len() == BLOCK_SIZES_BENCH_BENCHED_CORRESP_LENGTHS.len(),
+        "It appears that arrays of different lengths were entered."
+    );
+
+    assert!(
+        BLOCK_SIZES_BENCH_BENCHED_RANGE_LENGTH < BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES.len(),
+        "It appears that the index that was entered is out of range."
+    );
+
     let harness_config = BenchmarkHarnessConfiguration {
         iterations: STD_BENCH_ITERATIONS,
         first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT
     };
 
-    let window_sizes = if BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.is_empty() {
-        generate_window_sizes_for_block_size_benchmark()
-    } else {
-        BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES.to_vec()
-    };
-
+    let benched_range = &BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES[
+        BLOCK_SIZES_BENCH_BENCHED_RANGE_LENGTH
+    ];
+    let benched_input_length = BLOCK_SIZES_BENCH_BENCHED_CORRESP_LENGTHS[
+        BLOCK_SIZES_BENCH_BENCHED_RANGE_LENGTH
+    ];
+    let window_sizes = generate_window_sizes_for_block_size_benchmark(benched_range);
     for data_distribution in BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS {
         let mut benchmark_results_per_window = Vec::with_capacity(
             window_sizes.len()
@@ -939,7 +947,7 @@ fn start_block_sizes_benchmark(
             let test_data = data_distribution
                 .generate_distribution(
                     rng,
-                    BLOCK_SIZES_BENCH_BENCHED_LENGTH,
+                    benched_input_length,
                     *window_size
                 );
 
@@ -949,7 +957,9 @@ fn start_block_sizes_benchmark(
                 quantile: BLOCK_SIZES_BENCH_BENCHED_QUANTILE
             };
 
-            let mut benchmark_results = vec![];
+            let mut benchmark_results = Vec::with_capacity(
+                BLOCK_SIZES_BENCH_BENCHED_DISPATCHERS.len()
+            );
             for benched_dispatchers in BLOCK_SIZES_BENCH_BENCHED_DISPATCHERS {
                 benchmark_results.push(
                     benched_dispatchers.dispatch(
@@ -964,7 +974,7 @@ fn start_block_sizes_benchmark(
 
         let benchmark_header = format!(
             "Benchmark configuration - input length: {} distribution: {}",
-            BLOCK_SIZES_BENCH_BENCHED_LENGTH,
+            benched_input_length,
             data_distribution
         );
         println!("{}", benchmark_header);
@@ -988,8 +998,10 @@ fn start_block_sizes_benchmark(
     Ok(())
 }
 
-fn generate_window_sizes_for_block_size_benchmark() -> Vec<usize> {
-    (BLOCK_SIZES_BENCH_WINDOW_SIZE_STARTING_EXP..=BLOCK_SIZES_BENCH_WINDOW_SIZE_CAP_EXP)
+fn generate_window_sizes_for_block_size_benchmark(
+    range: &Range<usize>
+) -> Vec<usize> {
+    range.clone()
         .map(|exp| 2usize.pow(exp as u32) + 1)
         .collect::<Vec<usize>>()
 }

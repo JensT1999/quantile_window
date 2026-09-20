@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
-use crate::window::quantile_window::std_block_sizes::{self, StdBlockSizes};
+use crate::window::quantile_window::block_size_dispatcher::{
+    StdBlockSizes,
+    get_suitable_std_block_size
+};
 
 mod quantile_window;
 mod utils;
@@ -86,30 +89,21 @@ pub fn rolling_quantile_window(
     window_size: usize,
     quantile: f64
 ) -> Result<Vec<f64>, WindowError> {
-    let b16_metadata = StdBlockSizes::B16.calculate_metadata(window_size);
-    let b32_metadata = StdBlockSizes::B32.calculate_metadata(window_size);
-    let b64_metadata = StdBlockSizes::B64.calculate_metadata(window_size);
-
-    let need_b64 = b64_metadata.tree_buffer_length() <= b16_metadata.tree_buffer_length()
-        && b64_metadata.tree_buffer_length() <= b32_metadata.tree_buffer_length()
-        && b16_metadata.needed_blocks() > std_block_sizes::MIN_BLOCKS_FOR_B64;
-
-    if need_b64 {
-        return rolling_quantile_window_generic::<64, 4>(
+    let suitable_block_size = get_suitable_std_block_size(window_size);
+    match suitable_block_size {
+        StdBlockSizes::B16 => rolling_quantile_window_generic::<16, 1>(
             input_array,
             window_size,
             quantile
-        );
-    }
+        ),
 
-    if b16_metadata.tree_buffer_length() <= b32_metadata.tree_buffer_length() {
-        rolling_quantile_window_generic::<16, 1>(
+        StdBlockSizes::B32 => rolling_quantile_window_generic::<32, 2>(
             input_array,
             window_size,
             quantile
-        )
-    } else {
-        rolling_quantile_window_generic::<32, 2>(
+        ),
+
+        StdBlockSizes::B64 => rolling_quantile_window_generic::<64, 4>(
             input_array,
             window_size,
             quantile
