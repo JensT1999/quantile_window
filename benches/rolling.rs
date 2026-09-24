@@ -57,7 +57,7 @@ const QUANTILE_BENCH_BENCHED_QUANTILES: [f64; 5] = [
 const QUANTILE_BENCH_BENCHED_DISTRIBUTION: DataDistribution = DataDistribution::Continuous {
     data_bounds: DataBounds { lowest_possible_value: -1000.0, highest_possible_value: 1000.0 }
 };
-const QUANTILE_BENCH_BENCHED_WINDOW_SIZE: usize = 1000;
+const QUANTILE_BENCH_BENCHED_WINDOW_SIZE: usize = 1_000;
 
 // Basic block sizes benchmark configuration
 const BLOCK_SIZES_BENCH_BENCHED_QUANTILE: f64 = 0.5;
@@ -67,9 +67,15 @@ const BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS: [DataDistribution; 1] = [
     // },
 
     DataDistribution::Trend {
-        trend_ratio: 50.0,
+        trend_ratio: 10.0,
         noise_scale: 200.0
     }
+
+    // DataDistribution::SinusWave {
+    //     frequency: 0.005,
+    //     amplitude: 500.0,
+    //     noise_bounds: DataBounds { lowest_possible_value: -1000.0, highest_possible_value: 1000.0 }
+    // }
 ];
 const BLOCK_SIZES_BENCH_BENCHED_RANGE_LENGTH: usize = 1;
 const BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES: [Range<usize>; 3] = [
@@ -647,7 +653,7 @@ fn main() -> Result<(), Box<dyn Error>>{
 
     if !std_benchmark_start && !block_sizes_benchmark_start {
         println!(
-            "Select one of the following benchmarks as argument: Standard - {} or Block sizes - {} (needs arg)",
+            "Select one of the following benchmarks as argument: Standard - {} or Block sizes - {}",
             STD_BENCHMARK_KEY,
             BLOCK_SIZES_BENCHMARK_KEY
         );
@@ -1060,7 +1066,7 @@ fn build_block_size_benchmark_table(
                         |mut acc, res| {
                             let cell_data = format!(
                                 "{:.1} ({:.1}%)",
-                                res.get_median_m_per_s(),
+                                res.get_fastest_m_per_s(),
                                 res.get_spread()
                             );
 

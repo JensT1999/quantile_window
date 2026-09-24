@@ -32,8 +32,8 @@
 //! paths - but [`QuantileWindow::update_block_elements`] performs a linear scan
 //! within a block to locate the element to be removed, and that scan grows with the
 //! block size. Which side dominates depends on the window size, so the parent module
-//! selects the block size from `window_size` using thresholds determined by
-//! measurement rather than by a single default.
+//! does not use a fixed default. `block_size_dispatcher` derives the block size by
+//! comparing the metadata each candidate produces for the given `window_size`.
 //!
 //! ## Missing values
 //!
@@ -1774,7 +1774,7 @@ where
 }
 
 pub mod block_size_dispatcher {
-    //! Selects the `BLOCK_SIZE` used by [`rolling_quantile_window`], depending on the
+    //! Selects the `BLOCK_SIZE` used by [`crate::rolling_quantile_window`], depending on the
     //! requested window size.
     //!
     //! The block sizes below were determined by benchmarking; 16, 32 and 64
@@ -1805,11 +1805,13 @@ pub mod block_size_dispatcher {
     //! adds an entire new level at once. In terms of the window size
     //! this gives:
     //!
+    //! ```text
     //!     window_size = K_ARY^k * B
     //!
     //!     K_ARY  the number of children per node
     //!     k      the exponent, i.e. the number of levels
-    //!     B      the chosen `BLOCK_SIZE`
+    //!     B      the chosen BLOCK_SIZE
+    //! ```
     //!
     //! Since the three block sizes divide the same window differently -
     //! `B16` produces twice as many blocks as `B32` - they cross into a

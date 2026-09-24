@@ -21,10 +21,10 @@ impl Display for WindowError {
 
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WindowError::InputArrayIsEmptyError => write!(f, "InputArrayIsEmptyError: It seems the
+            WindowError::InputArrayIsEmptyError => write!(f, "InputArrayIsEmptyError: It seems the \
                 input array is empty"),
             WindowError::SizingError => write!(f, "SizingError: It seems you entered a wrong size"),
-            WindowError::InvalidQuantileError => write!(f, "InvalidQuantileError:
+            WindowError::InvalidQuantileError => write!(f, "InvalidQuantileError: \
                 It seems you entered an invalid quantile"),
         }
     }
@@ -42,6 +42,21 @@ impl std::error::Error for WindowError {}
 /// In this case the quantile will be calculated from the remaining valid elements.
 /// In explanation: When there are two of one hundred elements equals to [`f64::NAN`] the quantile will
 /// be calculated from the remaining ninety eight elements.
+///
+/// # Block size
+/// Internally the window is split into fixed-size blocks. The block size is a trade-off:
+/// larger blocks mean fewer blocks and therefore shallower tournament trees, but a longer
+/// linear scan inside each block. Which side dominates depends on the window size.
+///
+/// This function makes that choice for you. It derives the appropriate block size by
+/// comparing the metadata each candidate produces for the given `window_size`. In this context
+/// it selects between possible block sizes of 16, 32 and 64; 64 is the largest useful size,
+/// larger ones gained nothing in any benchmark.
+/// Across all measured window sizes the selection picks the fastest of those three
+/// (`cargo bench --bench rolling -- block_sizes_bench`).
+/// For more information on the implementation, take a look at `quantile_window::block_size_dispatcher`.
+///
+/// Use [`rolling_quantile_window_generic`] if you want to choose the block size yourself.
 ///
 /// # Returns
 /// A vector containing the calculated quantiles.
@@ -134,8 +149,10 @@ pub fn rolling_quantile_window(
 ///
 /// `BLOCK_SIZE` is a trade-off rather than a "smaller is better" choice. A larger block makes the linear search
 /// inside a block more expensive, but reduces the number of blocks and therefore the depth of the underlying
-/// tournament trees. The function [`rolling_quantile_window`] therefore uses thresholds to determine the right
-/// `BLOCK_SIZE` for the specific `window_size`.
+/// tournament trees. Which side wins depends on the window size, so there is no single best value.
+///
+/// [`rolling_quantile_window`] makes that choice automatically; use this function only to override it - to
+/// benchmark a particular size, or to pin one for a workload whose window size is known in advance.
 ///
 /// # Returns
 /// A vector containing the calculated quantiles.
@@ -205,7 +222,11 @@ fn valid_quantile(quantile: f64) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::{window::{rolling_quantile_window_generic, valid_quantile, WindowError}};
+    use crate::window::{
+        rolling_quantile_window_generic,
+        valid_quantile,
+        WindowError
+    };
 
     const TESTED_QUANTILES: [(f64, bool); 12] = [
         (0.01, true), (0.5, true), (0.001, false), (1.0, true), (1.01, false),
