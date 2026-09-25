@@ -89,17 +89,15 @@ where
     // elements the network is built for - the callers are the `sorting_network_*`
     // functions, each of which takes a fixed-size array and passes only literal indices
     // below that length. The bound therefore holds by construction, not by a check here.
-    let data_tup = unsafe {
+    let (left_value, right_value) = unsafe {
         (*data.get_unchecked(index1), *data.get_unchecked(index2))
     };
 
-    if data_tup.0 > data_tup.1 {
-        // SAFETY: as above - the same two indices were just read in bounds, and neither
-        // they nor the length of `data` changed in between.
-        unsafe {
-            *data.get_unchecked_mut(index1) = data_tup.1;
-            *data.get_unchecked_mut(index2) = data_tup.0;
-        }
+    // SAFETY: as above - the same two indices were just read in bounds, and neither
+    // they nor the length of `data` changed in between.
+    unsafe {
+        *data.get_unchecked_mut(index1) = left_value.min(right_value);
+        *data.get_unchecked_mut(index2) = left_value.max(right_value);
     }
 }
 
