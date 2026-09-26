@@ -194,7 +194,7 @@ pub fn process_and_assert_results(
         quantile
     );
 
-    process_results_and_assert_naive_results::<16, 1>(
+    process_results_and_assert_naive_results::<16>(
         test_data,
         test_label,
         window_size,
@@ -202,7 +202,7 @@ pub fn process_and_assert_results(
         &naive_result
     );
 
-    process_results_and_assert_naive_results::<32, 2>(
+    process_results_and_assert_naive_results::<32>(
         test_data,
         test_label,
         window_size,
@@ -210,7 +210,7 @@ pub fn process_and_assert_results(
         &naive_result
     );
 
-    process_results_and_assert_naive_results::<64, 4>(
+    process_results_and_assert_naive_results::<64>(
         test_data,
         test_label,
         window_size,
@@ -218,7 +218,7 @@ pub fn process_and_assert_results(
         &naive_result
     );
 
-    process_results_and_assert_naive_results::<128, 8>(
+    process_results_and_assert_naive_results::<128>(
         test_data,
         test_label,
         window_size,
@@ -227,14 +227,14 @@ pub fn process_and_assert_results(
     );
 }
 
-fn process_results_and_assert_naive_results<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
+fn process_results_and_assert_naive_results<const BLOCK_SIZE: usize>(
     test_data: &[f64],
     test_label: &str,
     window_size: usize,
     quantile: f64,
     naive_result: &[f64]
 ) {
-    let test_result = quantile_window::rolling_quantile_window_generic::<BLOCK_SIZE, SLICES_PER_BLOCK>(
+    let test_result = quantile_window::rolling_quantile_window_generic::<BLOCK_SIZE>(
         test_data,
         window_size,
         quantile

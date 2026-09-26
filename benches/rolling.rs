@@ -459,7 +459,7 @@ impl BenchmarkedFunction for Benchmark16BlockSize {
         window_size: usize,
         quantile: f64
     ) -> Result<Vec<f64>, WindowError> {
-        quantile_window::rolling_quantile_window_generic::<16,1>(
+        quantile_window::rolling_quantile_window_generic::<16>(
             test_data,
             window_size,
             quantile
@@ -479,7 +479,7 @@ impl BenchmarkedFunction for Benchmark32BlockSize {
         window_size: usize,
         quantile: f64
     ) -> Result<Vec<f64>, WindowError> {
-        quantile_window::rolling_quantile_window_generic::<32,2>(
+        quantile_window::rolling_quantile_window_generic::<32>(
             test_data,
             window_size,
             quantile
@@ -499,7 +499,7 @@ impl BenchmarkedFunction for Benchmark64BlockSize {
         window_size: usize,
         quantile: f64
     ) -> Result<Vec<f64>, WindowError> {
-        quantile_window::rolling_quantile_window_generic::<64,4>(
+        quantile_window::rolling_quantile_window_generic::<64>(
             test_data,
             window_size,
             quantile
@@ -519,7 +519,7 @@ impl BenchmarkedFunction for Benchmark128BlockSize {
         window_size: usize,
         quantile: f64
     ) -> Result<Vec<f64>, WindowError> {
-        quantile_window::rolling_quantile_window_generic::<128,8>(
+        quantile_window::rolling_quantile_window_generic::<128>(
             test_data,
             window_size,
             quantile

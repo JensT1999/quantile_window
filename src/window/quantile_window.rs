@@ -8,24 +8,18 @@
 //! ## Block layout
 //!
 //! The window is partitioned into fixed-size blocks of `BLOCK_SIZE` elements.
-//! Both `BLOCK_SIZE` and `SLICES_PER_BLOCK` are const generic parameters, so the
-//! layout is fixed at compile time and every block is a plain array rather than a
-//! separately allocated buffer.
+//! `BLOCK_SIZE` is a const generic parameter, so the layout is fixed at compile
+//! time and every block is a plain array rather than a separately allocated buffer.
 //!
-//! The two parameters are not independent. Blocks are initially sorted by running
-//! a sorting network over each slice and merging the sorted slices, which requires
-//!
-//! ```text
-//! SLICES_PER_BLOCK * SORTING_NETWORK_SIZE == BLOCK_SIZE
-//! ```
-//!
-//! This is enforced by an inline `const` assertion, so an inconsistent pair fails to
-//! compile rather than misbehaving at runtime. Any positive multiple of
-//! `SORTING_NETWORK_SIZE` is a valid block size - `SLICES_PER_BLOCK` is then simply
-//! `BLOCK_SIZE / SORTING_NETWORK_SIZE`, powers of two are not required, and there is
-//! no upper bound beyond what the window size makes meaningful. The parent module
-//! instantiates `<16, 1>`, `<32, 2>` and `<64, 4>`; those are the sizes it selects
-//! between, not the sizes the implementation is limited to.
+//! Blocks are initially sorted by running a sorting network over each slice of
+//! `SORTING_NETWORK_SIZE` elements and then sorting the whole block with the standard
+//! library sort, which recognises those slices as presorted runs and merges them
+//! instead of sorting from scratch. Therefore the `BLOCK_SIZE` parameter needs to be
+//! a multiple of `SORTING_NETWORK_SIZE`. This is enforced by an inline `const` assertion,
+//! so an inconsistency fails to compile rather than misbehaving at runtime. Furthermore,
+//! any positive multiple of `SORTING_NETWORK_SIZE` works; powers of two are not required,
+//! and there is no upper limit on the `BLOCK_SIZE`. For more information, see the note on
+//! allocations under [Internal State](#internal-state).
 //!
 //! Choosing the block size is a trade-off with no universally best answer. Larger
 //! blocks mean fewer blocks, hence smaller tournament trees and shorter root-to-leaf
@@ -70,10 +64,17 @@
 //! allocations at all** - it only writes into buffers that already exist. Measured,
 //! a complete call performs seven allocations regardless of input length: the result
 //! vector, the block array, the queue, the two trees, and the two scratch buffers
-//! used by [`QuantileWindow::find_value_by_rank`] during preparation. This is not
-//! an aspiration; `tests/allocations.rs` installs a counting global allocator and
-//! fails if the count differs between a short and a long input at the same window
-//! size.
+//! used by [`QuantileWindow::find_value_by_rank`] during preparation.
+//!
+//! Please note: Seven is the count for every block size the `block_size_dispatcher` selects.
+//! Above `BLOCK_SIZE` 512 the block sort requires a scratch buffer of its own and the setup
+//! count becomes seven plus one per block.
+//!
+//! The update phase stays allocation-free in either case, because sorting happens only
+//! in `prepare`. This is not an aspiration: `tests/allocations.rs` installs a counting
+//! global allocator and fails if the count differs between a short and a long input at
+//! the same window size - which is exactly what pins the update phase to zero, because
+//! setup scales with the window size and the update phase with the input length.
 //!
 //! ## Tournament trees
 //!
@@ -288,7 +289,7 @@ const PLACE_HOLDER_VALUE: OrderedDouble = OrderedDouble::MAX;
 const PRED_DUMMY_VALUE: OrderedDouble = OrderedDouble::MIN;
 const SUCC_DUMMY_VALUE: OrderedDouble = OrderedDouble::MAX;
 
-struct QuantileWindow<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize> {
+struct QuantileWindow<const BLOCK_SIZE: usize> {
     element_count: usize,
     invalid_count: usize,
 
@@ -327,59 +328,15 @@ struct QuantileWindowBlock<const BLOCK_SIZE: usize> {
 
 impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
 
-    fn sort<const SLICES_PER_BLOCK: usize>(&mut self) {
+    fn sort(&mut self) {
         // The remainder is always empty: a `const` block in `rolling_window` guarantees at
-        // compile time that `BLOCK_SIZE` is a multiple of `SORTING_NETWORK_SIZE` and that
-        // `SLICES_PER_BLOCK * SORTING_NETWORK_SIZE == BLOCK_SIZE`, so the chunks cover the
-        // whole block and there are exactly `SLICES_PER_BLOCK` of them.
+        // compile time that `BLOCK_SIZE` is a multiple of `SORTING_NETWORK_SIZE`.
         let chunks = self.data.as_chunks_mut::<SORTING_NETWORK_SIZE>().0;
         for chunk in chunks {
             sorting_networks::sorting_network_16(chunk);
         }
 
-        self.k_way_merge_slices::<SLICES_PER_BLOCK>();
-    }
-
-    fn k_way_merge_slices<const SLICES_PER_BLOCK: usize>(&mut self) {
-        let mut temp_block_data = [OrderedDouble::from_f64(0.0); BLOCK_SIZE];
-        temp_block_data.copy_from_slice(&self.data);
-
-        let mut slices_ptr = [0; SLICES_PER_BLOCK];
-        slices_ptr
-            .iter_mut()
-            .enumerate()
-            .for_each(|item| {
-                *item.1 = item.0 * SORTING_NETWORK_SIZE;
-            });
-
-        let mut k = 0;
-        loop {
-            let mut smallest = OrderedDouble::MAX;
-            let mut target_slice = 0;
-            let mut found = false;
-
-            for (index, slice_ptr) in slices_ptr.iter().enumerate() {
-                let max_ptr = (index * SORTING_NETWORK_SIZE) + SORTING_NETWORK_SIZE;
-                if *slice_ptr == max_ptr {
-                    continue;
-                }
-
-                let slice_value = temp_block_data[*slice_ptr];
-                if slice_value <= smallest {
-                    smallest = slice_value;
-                    target_slice = index;
-                    found = true;
-                }
-            }
-
-            if !found {
-                break;
-            }
-
-            self.data[k] = smallest;
-            slices_ptr[target_slice] += 1;
-            k += 1;
-        }
+        self.data.sort();
     }
 
     #[inline(always)]
@@ -486,8 +443,7 @@ struct QuantileWindowUpdateResult {
     window_no_valid_succ: bool,
 }
 
-impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
-    QuantileWindow<BLOCK_SIZE, SLICES_PER_BLOCK> {
+impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 
     fn new(window_size: usize, quantile: f64) -> Self {
         let needed_blocks = quantilewindow_utils::calculate_needed_blocks::<BLOCK_SIZE>(window_size);
@@ -588,7 +544,7 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
     fn initial_sort(&mut self) {
         self.block_data
             .iter_mut()
-            .for_each(|block| block.sort::<SLICES_PER_BLOCK>());
+            .for_each(|block| block.sort());
     }
 
     fn find_value_by_rank(&self, searched_rank: usize) -> QuantileWindowSelectionResult {
@@ -1327,8 +1283,7 @@ impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
 }
 
 // QuantileWindow Test
-impl<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>
-    QuantileWindow<BLOCK_SIZE, SLICES_PER_BLOCK> {
+impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 
     #[cfg(debug_assertions)]
     fn debug_update_window_invariants(&self) {
@@ -1910,7 +1865,7 @@ pub mod block_size_dispatcher {
 }
 
 // Main functions
-pub fn rolling_window<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
+pub fn rolling_window<const BLOCK_SIZE: usize>(
     input_array: &[f64],
     window_size: usize,
     quantile: f64
@@ -1918,8 +1873,7 @@ pub fn rolling_window<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
     const {
         assert!(
             BLOCK_SIZE > 0 &&
-            BLOCK_SIZE.is_multiple_of(SORTING_NETWORK_SIZE) &&
-            SLICES_PER_BLOCK * SORTING_NETWORK_SIZE == BLOCK_SIZE
+            BLOCK_SIZE.is_multiple_of(SORTING_NETWORK_SIZE)
         );
     }
 
@@ -1929,7 +1883,7 @@ pub fn rolling_window<const BLOCK_SIZE: usize, const SLICES_PER_BLOCK: usize>(
     let input_slice = &input_array[0..window_size];
     let mut window = input_slice
         .iter()
-        .fold(QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::new(window_size, quantile),
+        .fold(QuantileWindow::<BLOCK_SIZE>::new(window_size, quantile),
             |mut window, value| {
                 let input_value = quantilewindow_utils::map_to_corresponding_value(*value);
                 window.add(input_value);
@@ -2151,7 +2105,6 @@ mod tests {
     }
 
     const BLOCK_SIZE: usize = 64;
-    const SLICES_PER_BLOCK: usize = BLOCK_SIZE / SORTING_NETWORK_SIZE;
     const RAND_TESTING_SEED: u64 = 109;
     const QUANTILEWINDOW_TEST_SIZE: usize = 1000;
     const QUANTILEWINDOW_TEST_QUANTILE: f64 = 0.01;
@@ -2216,8 +2169,10 @@ mod tests {
             tree_calculate_metadata(expected_window_blocks);
         let (expected_leafs_starting_index, expected_tree_length) = expected_tree_metadata;
 
-        let test_window = QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::
-            new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
+        let test_window = QuantileWindow::<BLOCK_SIZE>:: new(
+            QUANTILEWINDOW_TEST_SIZE,
+            QUANTILEWINDOW_TEST_QUANTILE
+        );
 
         assert!(test_window.element_count == 0);
         assert!(test_window.quantile == QUANTILEWINDOW_TEST_QUANTILE);
@@ -2279,8 +2234,10 @@ mod tests {
             .map(|x| x as f64)
             .collect::<Vec<f64>>();
 
-        let mut test_window = QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::
-            new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
+        let mut test_window = QuantileWindow::<BLOCK_SIZE>::new(
+            QUANTILEWINDOW_TEST_SIZE,
+            QUANTILEWINDOW_TEST_QUANTILE
+        );
 
         let input_slice = &test_input[0..BLOCK_SIZE];
         for input in input_slice {
@@ -2317,8 +2274,10 @@ mod tests {
             .map(|_| rng.random_range(0.0..100.0))
             .collect::<Vec<f64>>();
 
-        let mut test_window = QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::
-            new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
+        let mut test_window = QuantileWindow::<BLOCK_SIZE>::new(
+            QUANTILEWINDOW_TEST_SIZE,
+            QUANTILEWINDOW_TEST_QUANTILE
+        );
 
         test_input.iter()
             .for_each(|value| {
@@ -2339,8 +2298,10 @@ mod tests {
             .map(|_| rng.random_range(0.0..100.0))
             .collect::<Vec<f64>>();
 
-        let mut test_window = QuantileWindow::<BLOCK_SIZE, SLICES_PER_BLOCK>::
-            new(QUANTILEWINDOW_TEST_SIZE, QUANTILEWINDOW_TEST_QUANTILE);
+        let mut test_window = QuantileWindow::<BLOCK_SIZE>::new(
+            QUANTILEWINDOW_TEST_SIZE,
+            QUANTILEWINDOW_TEST_QUANTILE
+        );
 
         let input_slice = &test_input[0..];
         input_slice.iter()
