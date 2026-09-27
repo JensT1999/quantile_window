@@ -732,7 +732,6 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         }
     }
 
-    #[inline(never)]
     fn update_window(
         &mut self,
         new_value: OrderedDouble
@@ -815,7 +814,6 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         old_value
     }
 
-    #[inline(never)]
     fn update_block_elements(
         &mut self,
         new_value: OrderedDouble,
@@ -1640,6 +1638,7 @@ where
         best
     }
 
+    #[inline(always)]
     fn update_tree<const BLOCK_SIZE: usize>(
         &mut self,
         target_block: &QuantileWindowBlock<BLOCK_SIZE>,
