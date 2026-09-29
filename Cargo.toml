@@ -2,9 +2,15 @@
 name = "quantile_window"
 version = "0.1.0"
 edition = "2024"
+description = "Rolling quantiles over f64 slices"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/JensT1999/Rolling-Quantile-Window"
+readme = "README.md"
+keywords = ["quantile", "rolling", "sliding-window", "statistics"]
+categories = ["algorithms", "data-structures"]
 
 [dev-dependencies]
-rand = "0.10.2"
+rand = "0.10.3"
 
 [[bench]]
 name = "rolling"
