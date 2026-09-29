@@ -27,7 +27,7 @@ const WINDOW_SIZE_DIST_BENCH_BENCHED_QUANTILE: f64 = 0.5;
 const WINDOW_SIZE_DIST_BENCH_BENCHED_WINDOW_SIZES: [usize; 6] = [
     100, 1_000, 10_000, 100_000, 1_000_000, 2_000_000
 ];
-const WINDOW_SIZE_DIST_BENCH_BENCHED_DISTRIBUTIONS: [DataDistribution; 4] = [
+const WINDOW_SIZE_DIST_BENCH_BENCHED_DISTRIBUTIONS: [DataDistribution; 5] = [
     DataDistribution::Continuous {
         data_bounds: DataBounds { lowest_possible_value: -1000.0, highest_possible_value: 1000.0 }
     },
@@ -39,7 +39,12 @@ const WINDOW_SIZE_DIST_BENCH_BENCHED_DISTRIBUTIONS: [DataDistribution; 4] = [
 
     DataDistribution::NaN {
         data_bounds: DataBounds { lowest_possible_value: -1000.0, highest_possible_value: 1000.0 },
-        nan_ratio: 0.5
+        nan_ratio: 0.2
+    },
+
+    DataDistribution::NaN {
+        data_bounds: DataBounds { lowest_possible_value: -1000.0, highest_possible_value: 1000.0 },
+        nan_ratio: 0.4
     },
 
     DataDistribution::SinusWave {
@@ -62,27 +67,17 @@ const QUANTILE_BENCH_BENCHED_WINDOW_SIZE: usize = 1_000;
 // Basic block sizes benchmark configuration
 const BLOCK_SIZES_BENCH_BENCHED_QUANTILE: f64 = 0.5;
 const BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS: [DataDistribution; 1] = [
-    // DataDistribution::Continuous {
-    //     data_bounds: DataBounds { lowest_possible_value: -1000.0, highest_possible_value: 1000.0 }
-    // },
-
     DataDistribution::Trend {
         trend_ratio: 10.0,
         noise_scale: 200.0
     }
-
-    // DataDistribution::SinusWave {
-    //     frequency: 0.005,
-    //     amplitude: 500.0,
-    //     noise_bounds: DataBounds { lowest_possible_value: -1000.0, highest_possible_value: 1000.0 }
-    // }
 ];
-const BLOCK_SIZES_BENCH_BENCHED_RANGE_LENGTH: usize = 1;
-const BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES: [Range<usize>; 3] = [
-    (6..21), (21..25), (26..27)
+const BLOCK_SIZES_BENCH_SELECTED_RANGE_IDX: usize = 0;
+const BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES: [Range<usize>; 2] = [
+    (6..21), (21..25)
 ];
-const BLOCK_SIZES_BENCH_BENCHED_CORRESP_LENGTHS: [usize; 3] = [
-    20_000_000, 100_000_000, 670_000_000
+const BLOCK_SIZES_BENCH_BENCHED_CORRESP_LENGTHS: [usize; 2] = [
+    20_000_000, 100_000_000
 ];
 const BLOCK_SIZES_BENCH_BENCHED_DISPATCHERS: [BenchmarkDispatchers; 5] = [
     BenchmarkDispatchers::BlockSize16Dispatcher,
@@ -928,7 +923,7 @@ fn start_block_sizes_benchmark(
     );
 
     assert!(
-        BLOCK_SIZES_BENCH_BENCHED_RANGE_LENGTH < BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES.len(),
+        BLOCK_SIZES_BENCH_SELECTED_RANGE_IDX < BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES.len(),
         "It appears that the index that was entered is out of range."
     );
 
@@ -938,10 +933,10 @@ fn start_block_sizes_benchmark(
     };
 
     let benched_range = &BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES[
-        BLOCK_SIZES_BENCH_BENCHED_RANGE_LENGTH
+        BLOCK_SIZES_BENCH_SELECTED_RANGE_IDX
     ];
     let benched_input_length = BLOCK_SIZES_BENCH_BENCHED_CORRESP_LENGTHS[
-        BLOCK_SIZES_BENCH_BENCHED_RANGE_LENGTH
+        BLOCK_SIZES_BENCH_SELECTED_RANGE_IDX
     ];
     let window_sizes = generate_window_sizes_for_block_size_benchmark(benched_range);
     for data_distribution in BLOCK_SIZES_BENCH_BENCHED_DISTRIBUTIONS {
