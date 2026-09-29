@@ -17,14 +17,14 @@
 //! instead of sorting from scratch. Therefore the `BLOCK_SIZE` parameter needs to be
 //! a multiple of `SORTING_NETWORK_SIZE`. This is enforced by an inline `const` assertion,
 //! so an inconsistency fails to compile rather than misbehaving at runtime. Furthermore,
-//! any positive multiple of `SORTING_NETWORK_SIZE` works; powers of two are not required,
+//! any positive multiple of `SORTING_NETWORK_SIZE` works, powers of two are not required,
 //! and there is no upper limit on the `BLOCK_SIZE`. For more information, see the note on
 //! allocations under [Internal State](#internal-state).
 //!
 //! Choosing the block size is a trade-off with no universally best answer. Larger
-//! blocks mean fewer blocks, hence smaller tournament trees and shorter root-to-leaf
-//! paths - but [`QuantileWindow::update_block_elements`] performs a linear scan
-//! within a block to locate the element to be removed, and that scan grows with the
+//! blocks mean fewer blocks, hence smaller tournament trees and shorter leaf-to-root
+//! paths. On the other side [`QuantileWindow::update_block_elements`] performs a linear
+//! scan within a block to locate the element to be removed, and that scan grows with the
 //! block size. Which side dominates depends on the window size, so the parent module
 //! does not use a fixed default. `block_size_dispatcher` derives the block size by
 //! comparing the metadata each candidate produces for the given `window_size`.
@@ -35,18 +35,17 @@
 //! makes to its callers:
 //!
 //! - A `NaN` in the input never contributes to the quantile.
-//! - The rank is computed over the number of valid values currently in the window,
-//!   not over the window size.
+//! - The rank is computed over the number of valid values currently in the window.
 //! - The result is `NaN` if and only if the window contains no valid value at all.
 //!
-//! The mechanism is a consequence of the ordering, not a special case scattered
-//! through the code: an incoming `NaN` is mapped to [`OrderedDouble::MAX`], the
-//! largest key in the total order. Missing values therefore accumulate at the right
-//! edge of every sorted block and can never come to lie between two valid values.
-//! Only the bookkeeping is explicit - `invalid_count` tracks how many of the
-//! `element_count` entries are missing, and `valid_size()` is the difference. The
-//! searched rank is recomputed from `valid_size()` on every step, which is what
-//! makes the second promise above hold as the number of missing values changes.
+//! The mechanism is a consequence of the ordering: an incoming `NaN` is mapped to
+//! [`OrderedDouble::MAX`], the largest key in the total order. Missing values
+//! therefore accumulate at the right edge of every sorted block and can never end up
+//! between two valid values. Only the bookkeeping is explicit: `invalid_count` tracks
+//! how many of the `element_count` entries are missing, and `valid_size()` is the
+//! difference. The searched rank is recomputed from `valid_size()` on every step,
+//! which is what makes the second promise from above hold as the number of missing
+//! values changes.
 //!
 //! ## Internal state
 //!
@@ -57,23 +56,22 @@
 //!   candidates.
 //!
 //! All of these are fully determined by the `window_size` passed to
-//! [`rolling_window`]: the number of blocks, the queue length, and the size of the
-//! tournament trees follow from it.
+//! [`rolling_window`].
 //!
 //! Everything is allocated during setup. **The update phase performs no heap
 //! allocations at all** - it only writes into buffers that already exist. Measured,
 //! a complete call performs seven allocations regardless of input length: the result
-//! vector, the block array, the queue, the two trees, and the two scratch buffers
-//! used by [`QuantileWindow::find_value_by_rank`] during preparation.
+//! vector, the block array, the queue, the two trees, and the two buffers used by
+//! [`QuantileWindow::find_value_by_rank`] during preparation.
 //!
 //! Please note: Seven is the count for every block size the `block_size_dispatcher` selects.
-//! Above `BLOCK_SIZE` 512 the block sort requires a scratch buffer of its own and the setup
-//! count becomes seven plus one per block.
+//! Above `BLOCK_SIZE` 512 the block sort requires a buffer of its own and the setup count
+//! becomes seven plus one per block.
 //!
 //! The update phase stays allocation-free in either case, because sorting happens only
 //! in `prepare`. This is not an aspiration: `tests/allocations.rs` installs a counting
 //! global allocator and fails if the count differs between a short and a long input at
-//! the same window size - which is exactly what pins the update phase to zero, because
+//! the same window size. This is exactly what pins the update phase to zero, because
 //! setup scales with the window size and the update phase with the input length.
 //!
 //! ## Tournament trees
@@ -82,7 +80,7 @@
 //! candidate value contributed by a block, and the index of the corresponding
 //! [`QuantileWindowBlock`] within the internal block array.
 //!
-//! Both trees are `K_ARY`-ary. The number of leaves is rounded up to the next power
+//! Both trees are `K_ARY`. The number of leaves is rounded up to the next power
 //! of `K_ARY` so that the trees stay perfect, which keeps the index arithmetic
 //! branch-free at the cost of some padding leaves.
 //!
@@ -97,10 +95,10 @@
 //! dummy value, and are therefore pushed away from the root automatically.
 //!
 //! The dummy value also serves as the invalidity marker.
-//! [`QuantileWindowTree::got_invalid_root`] reports whether the root still holds it,
-//! which is exactly the case when no block contributed a candidate at all. A
+//! [`QuantileWindowTree::got_invalid_root`] reports whether the root holds it or not,
+//! which is exactly the case when no block contributes a candidate at all. A
 //! predecessor tree with an invalid root means the current floor value is the
-//! smallest valid value in the window; a successor tree with an invalid root means it
+//! smallest valid value in the window. A successor tree with an invalid root means it
 //! is the largest.
 //!
 //! ## Execution phases
@@ -117,8 +115,8 @@
 //! update phase begins.
 //!
 //! The preparation phase begins by sorting every [`QuantileWindowBlock`]. This is
-//! achieved by combining the previously mentioned sorting network with a k-way merge
-//! algorithm.
+//! achieved by combining the previously mentioned sorting network with the standard
+//! stable sort algorithm of rust.
 //!
 //! Once all blocks are sorted, the initial global `floor_value` is determined by
 //! [`QuantileWindow::find_value_by_rank`]. The `floor_value` is defined as the lower
@@ -158,7 +156,7 @@
 //!
 //! This shift is then performed iteratively using the successor tree until the
 //! remaining number of duplicate positions to skip reaches zero. In each iteration,
-//! the root of the successor tree yields the next occurrence of the global
+//! the root of the successor tree provides the next occurrence of the global
 //! `floor_value`. The metadata stored alongside the successor value identifies the
 //! corresponding block, which becomes the new floor block.
 //!
@@ -174,40 +172,41 @@
 //! first [`QuantileWindowBlock`].
 //!
 //! Each [`QuantileWindowBlock`] is updated for exactly the number of elements defined
-//! by its internal length before the next block is processed. Once the last block has
-//! been completely updated, the process starts again with the first block. Therefore,
+//! by its internal length before the next block is processed. Once the last block
+//! has been completely updated, the process starts again with the first block. Therefore,
 //! the update process behaves similarly to a circular buffer.
 //!
 //! The removed value is obtained from the insertion-order queue. Its position is
 //! determined by the current block index multiplied by `BLOCK_SIZE` plus the internal
-//! update index of the block. This update index tracks how many elements of the
-//! corresponding block have already been replaced.
+//! `update_index` of the block. This `update_index` tracks how many elements of the
+//! corresponding block have already been updated.
 //!
 //! The main challenge during the update phase is maintaining the global quantile
 //! position after local block modifications. Changes in the distribution of values
-//! between a block's two partitions cause its tracker to move: removing a value from
-//! the left partition and inserting one into the right partition shifts the tracker
-//! one position to the left, and the opposite operation shifts it one to the right.
+//! between a block's two partitions cause its tracker to move. For example: removing
+//! a value from the left side of the tracker and inserting one on the right side shifts
+//! the tracker one position to the left, and the opposite operation shifts it one to
+//! the right.
 //!
-//! Every local tracker movement is translated into a global window-level delta, which
-//! accumulates the effect of all local block modifications on the global quantile
-//! position. The two levels move in opposite directions: a tracker moving left lowers
+//! Every local tracker movement is translated into a global delta, which accumulates
+//! the effect of all local block modifications on the global quantile position.
+//! The two levels move in opposite directions: a tracker moving left lowers
 //! `actual_floor_rank`, which leaves it below the target rank, so the compensation
 //! that follows shifts the global `floor_value` to the right.
 //!
-//! A block update is therefore carried out in three steps:
+//! A block update is therefore subdivided into three steps:
 //!
 //! 1. [`QuantileWindow::update_block_elements`] removes the outgoing value from the
 //!    sorted block and shifts the incoming one into its place, returning the index
-//!    the old value occupied and the index the new value ended up at.
+//!    of the old value and the index where the new value ended up at.
 //! 2. [`QuantileWindow::process_update_result`] derives the tracker adjustment from
-//!    those two indices. It is generic over `IS_FLOOR_BLOCK`, because the block
+//!    these two indices. It is generic over `IS_FLOOR_BLOCK`, because the block
 //!    currently holding the global `floor_value` follows different rules than any
 //!    other block, and resolving that at compile time keeps the branch out of the
 //!    hot path.
 //! 3. [`QuantileWindow::handle_update_result`] applies the outcome: it writes the new
-//!    tracker and `ran_out_right` flag, updates whichever tournament trees are
-//!    affected, and handles the case where the removed element was the tracked one
+//!    tracker as well as the `ran_out_right` flag, updates whichever tournament trees
+//!    are affected, and handles the case where the removed element was the tracked one
 //!    and no successor exists.
 //!
 //! After the local block update has completed, the previously accumulated global
@@ -223,22 +222,21 @@
 //!
 //! ## Boundary cases at the edges of the window
 //!
-//! Two situations have no successor to move to, and both are reached by ordinary
-//! inputs rather than by pathological ones:
+//! Two situations have no successor to move to, and both can occurr with ordinary
+//! inputs:
 //!
 //! - **The floor value is the largest valid value.** This is the normal state for
 //!   `quantile == 1.0`, and it occurs for any quantile whenever the removed element
 //!   was the tracked one. The successor tree then has an invalid root, and the floor
-//!   is moved to the predecessor instead
-//!   ([`QuantileWindow::shift_floor_to_predeccessor`]).
-//! - **Neither a successor nor a predecessor exists.** The window then holds at most
+//!   is moved to the predecessor instead ([`QuantileWindow::shift_floor_to_predeccessor`]).
+//! - **Neither a successor or a predecessor exists.** The window then holds at most
 //!   one valid value, and the floor is taken directly from the block rather than by
-//!   shifting - there is nothing to shift towards.
+//!   shifting.
 //!
 //! If every value in the window is missing, the window has no floor at all and
-//! reports `NaN`. When a valid value arrives afterwards, the window is rebuilt by
-//! [`QuantileWindow::reinitialize_window`]; this is the only path that leaves the
-//! empty state.
+//! reports `NaN`. When a valid value arrives, the window is rebuilt by
+//! [`QuantileWindow::reinitialize_window`]. This is also the only path that allows
+//! leaving the empty state produced by a window full of `NaN`s.
 //!
 //! ## Invariants
 //!
@@ -259,11 +257,10 @@
 //! 6. Each block contributes a successor candidate to the global successor tree. For
 //!    every block, this candidate is the value at the block's tracker position. The
 //!    only exception is the block containing the current global `floor_value`, where
-//!    the candidate is taken from the position immediately after the tracker
-//!    (`tracker + 1`).
+//!    the candidate is taken from the position after the tracker (`tracker + 1`).
 //! 7. Each block contributes a predecessor candidate to the global predecessor tree.
-//!    This candidate always corresponds to the value at the position immediately
-//!    before the block's tracker (`tracker - 1`).
+//!    This candidate always corresponds to the value at the position before the
+//!    block's tracker (`tracker - 1`).
 //! 8. The global successor tree maintains the minimum of all successor values provided
 //!    by the individual blocks.
 //! 9. The global predecessor tree maintains the maximum of all predecessor values

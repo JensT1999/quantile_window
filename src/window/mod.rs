@@ -50,11 +50,12 @@ impl std::error::Error for WindowError {}
 ///
 /// This function makes that choice for you. It derives the appropriate block size by
 /// comparing the metadata each candidate produces for the given `window_size`. In this context
-/// it selects between possible block sizes of 16, 32 and 64; 64 is the largest useful size,
+/// it selects between possible block sizes of 16, 32 and 64. 64 is the largest useful size,
 /// larger ones gained nothing in any benchmark.
-/// Across all measured window sizes the selection picks the fastest of those three
-/// (`cargo bench --bench rolling -- block_sizes_bench`).
+/// Across all measured window sizes the selection tries to pick the fastest of those three.
 /// For more information on the implementation, take a look at `quantile_window::block_size_dispatcher`.
+///
+/// Use (`cargo bench --bench rolling -- block_sizes_bench`) for the specific benchmark.
 ///
 /// Use [`rolling_quantile_window_generic`] if you want to choose the block size yourself.
 ///
@@ -148,8 +149,10 @@ pub fn rolling_quantile_window(
 /// inside a block more expensive, but reduces the number of blocks and therefore the depth of the underlying
 /// tournament trees. Which side wins depends on the window size, so there is no single best value.
 ///
-/// [`rolling_quantile_window`] makes that choice automatically; use this function only to override it - to
-/// benchmark a particular size, or to pin one for a workload whose window size is known in advance.
+/// [`rolling_quantile_window`] makes that choice automatically, use this function only to override it.
+/// Possible use cases could be:
+/// - benchmark a particular `BLOCK_SIZE`
+/// - pinning a `BLOCK_SIZE` for a specific window size
 ///
 /// # Returns
 /// A vector containing the calculated quantiles.
