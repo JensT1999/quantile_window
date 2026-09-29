@@ -142,7 +142,7 @@ pub fn rolling_quantile_window(
 /// # Constraints
 /// - `BLOCK_SIZE` must be greater than zero.
 /// - `BLOCK_SIZE` must be a value that is divisible by the size of the underlying sorting network. In this
-/// implementation, the sorting network has a size of 16.
+///   implementation, the sorting network has a size of 16.
 ///
 /// `BLOCK_SIZE` is a trade-off rather than a "smaller is better" choice. A larger block makes the linear search
 /// inside a block more expensive, but reduces the number of blocks and therefore the depth of the underlying

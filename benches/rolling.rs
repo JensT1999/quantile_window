@@ -80,11 +80,11 @@ const BLOCK_SIZES_BENCH_BENCHED_CORRESP_LENGTHS: [usize; 2] = [
     20_000_000, 100_000_000
 ];
 const BLOCK_SIZES_BENCH_BENCHED_DISPATCHERS: [BenchmarkDispatchers; 5] = [
-    BenchmarkDispatchers::BlockSize16Dispatcher,
-    BenchmarkDispatchers::BlockSize32Dispatcher,
-    BenchmarkDispatchers::BlockSize64Dispatcher,
-    BenchmarkDispatchers::BlockSize128Dispatcher,
-    BenchmarkDispatchers::StdDispatcher
+    BenchmarkDispatchers::BlockSize16,
+    BenchmarkDispatchers::BlockSize32,
+    BenchmarkDispatchers::BlockSize64,
+    BenchmarkDispatchers::BlockSize128,
+    BenchmarkDispatchers::Std
 ];
 const METRICS_OUTPUT_COL_FACTOR: usize = 15;
 
@@ -360,11 +360,11 @@ struct BenchmarkCaseConfiguration<'a> {
 }
 
 enum BenchmarkDispatchers {
-    StdDispatcher,
-    BlockSize16Dispatcher,
-    BlockSize32Dispatcher,
-    BlockSize64Dispatcher,
-    BlockSize128Dispatcher
+    Std,
+    BlockSize16,
+    BlockSize32,
+    BlockSize64,
+    BlockSize128
 }
 
 impl BenchmarkDispatchers {
@@ -375,27 +375,27 @@ impl BenchmarkDispatchers {
         case_config: &BenchmarkCaseConfiguration
     ) -> Result<BenchmarkResult, WindowError> {
         match self {
-            BenchmarkDispatchers::StdDispatcher => run_benchmark::<BenchmarkStdDispatcher>(
+            BenchmarkDispatchers::Std => run_benchmark::<BenchmarkStdDispatcher>(
                 harness_config,
                 case_config
             ),
 
-            BenchmarkDispatchers::BlockSize16Dispatcher => run_benchmark::<Benchmark16BlockSize>(
+            BenchmarkDispatchers::BlockSize16 => run_benchmark::<Benchmark16BlockSize>(
                 harness_config,
                 case_config
             ),
 
-            BenchmarkDispatchers::BlockSize32Dispatcher => run_benchmark::<Benchmark32BlockSize>(
+            BenchmarkDispatchers::BlockSize32 => run_benchmark::<Benchmark32BlockSize>(
                 harness_config,
                 case_config
             ),
 
-            BenchmarkDispatchers::BlockSize64Dispatcher => run_benchmark::<Benchmark64BlockSize>(
+            BenchmarkDispatchers::BlockSize64 => run_benchmark::<Benchmark64BlockSize>(
                 harness_config,
                 case_config
             ),
 
-            BenchmarkDispatchers::BlockSize128Dispatcher => run_benchmark::<Benchmark128BlockSize>(
+            BenchmarkDispatchers::BlockSize128 => run_benchmark::<Benchmark128BlockSize>(
                 harness_config,
                 case_config
             ),
@@ -406,11 +406,11 @@ impl BenchmarkDispatchers {
         &self
     ) -> String {
         match self {
-            BenchmarkDispatchers::StdDispatcher => BenchmarkStdDispatcher::get_tag(),
-            BenchmarkDispatchers::BlockSize16Dispatcher => Benchmark16BlockSize::get_tag(),
-            BenchmarkDispatchers::BlockSize32Dispatcher => Benchmark32BlockSize::get_tag(),
-            BenchmarkDispatchers::BlockSize64Dispatcher => Benchmark64BlockSize::get_tag(),
-            BenchmarkDispatchers::BlockSize128Dispatcher => Benchmark128BlockSize::get_tag()
+            BenchmarkDispatchers::Std => BenchmarkStdDispatcher::get_tag(),
+            BenchmarkDispatchers::BlockSize16 => Benchmark16BlockSize::get_tag(),
+            BenchmarkDispatchers::BlockSize32 => Benchmark32BlockSize::get_tag(),
+            BenchmarkDispatchers::BlockSize64 => Benchmark64BlockSize::get_tag(),
+            BenchmarkDispatchers::BlockSize128 => Benchmark128BlockSize::get_tag()
         }
     }
 }
