@@ -7,12 +7,12 @@
 //!
 //! ## Block layout
 //!
-//! The window is partitioned into fixed-size blocks of `BLOCK_SIZE` elements.
+//! The window is partitioned into fixed-size blocks of `BLOCK_SIZE` values.
 //! `BLOCK_SIZE` is a const generic parameter, so the layout is fixed at compile
 //! time and every block is a plain array rather than a separately allocated buffer.
 //!
 //! Blocks are initially sorted by running a sorting network over each slice of
-//! `SORTING_NETWORK_SIZE` elements and then sorting the whole block with the standard
+//! `SORTING_NETWORK_SIZE` values and then sorting the whole block with the standard
 //! library sort, which recognises those slices as presorted runs and merges them
 //! instead of sorting from scratch. Therefore the `BLOCK_SIZE` parameter needs to be
 //! a multiple of `SORTING_NETWORK_SIZE`. This is enforced by an inline `const` assertion,
@@ -23,11 +23,12 @@
 //!
 //! Choosing the block size is a trade-off with no universally best answer. Larger
 //! blocks mean fewer blocks, hence smaller tournament trees and shorter leaf-to-root
-//! paths. On the other side [`QuantileWindow::update_block_elements`] performs a linear
-//! scan within a block to locate the element to be removed, and that scan grows with the
-//! block size. Which side dominates depends on the window size, so the parent module
-//! does not use a fixed default. `block_size_dispatcher` derives the block size by
-//! comparing the metadata each candidate produces for the given `window_size`.
+//! paths. On the other side [`QuantileWindow::update_block_elements`] performs linear
+//! scans within a block to locate the element to be removed and the index, where the new
+//! element is inserted. Those scans grow with the `BLOCK_SIZE`. Which side dominates depends
+//! on the window size, so the parent module does not use a fixed default.
+//! `block_size_dispatcher` derives the block size by comparing the metadata each candidate
+//! produces for the given `window_size`.
 //!
 //! ## Missing values
 //!
@@ -51,7 +52,7 @@
 //!
 //! The internal state is represented by [`QuantileWindow`], which owns
 //! - an array of [`QuantileWindowBlock`]s,
-//! - a queue storing the elements in insertion order, and
+//! - a queue storing the values in insertion order, and
 //! - two tournament trees used to maintain the global predecessor and successor
 //!   candidates.
 //!
@@ -70,9 +71,10 @@
 //!
 //! The update phase stays allocation-free in either case, because sorting happens only
 //! in `prepare`. This is not an aspiration: `tests/allocations.rs` installs a counting
-//! global allocator and fails if the count differs between a short and a long input at
-//! the same window size. This is exactly what pins the update phase to zero, because
-//! setup scales with the window size and the update phase with the input length.
+//! global allocator and fails if the count differs between a 'only setup input' and a
+//! short input or a short input and a long input - all at the same window size.
+//! This is exactly what pins the update phase to zero, because setup scales with the
+//! window size and the update phase with the input length.
 //!
 //! ## Tournament trees
 //!
@@ -269,7 +271,7 @@
 //!     `actual_floor_block_index`.
 //! 11. The sum of all block trackers equals `actual_floor_rank`.
 //!
-//! Invariants 2, 4, 10 and 11 are checked after every update in debug builds by
+//! Invariants 2, 4, 8, 9, 10 and 11 are checked after every update in debug builds by
 //! [`QuantileWindow::debug_update_window_invariants`].
 
 use std::{marker::PhantomData};
@@ -372,7 +374,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
                 *self.data.get_unchecked(self.length - 1)
             }
         } else if current_block_tracker == 0 {
-            PRED_DUMMY_VALUE
+            QuantileWindowPredeccessorTree::DUMMY_VALUE
         } else {
             debug_assert!(current_block_tracker < self.length);
 
@@ -401,7 +403,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
                 *self.data.get_unchecked(succ_index)
             }
         } else {
-            SUCC_DUMMY_VALUE
+            QuantileWindowSuccessorTree::DUMMY_VALUE
         }
     }
 
@@ -538,7 +540,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 
         let selection_result = self.find_value_by_rank(floor_rank);
         let global_floor_candidate = selection_result.selection_candidate;
-        self.initialize_block_tracker( global_floor_candidate);
+        self.initialize_block_tracker(global_floor_candidate);
 
         self.pred_tree.initialize_tree(&self.block_data);
         self.succ_tree.initialize_tree(&self.block_data);
@@ -716,8 +718,8 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
                 continue;
             }
 
-            let lower_bound_of_floor_value =
-                block.data.partition_point(|&x| x < floor_value_canidate.block_value);
+            let lower_bound_of_floor_value = block.data
+                .partition_point(|&x| x < floor_value_canidate.block_value);
             if lower_bound_of_floor_value == block.length {
                 block.ran_out_right = true;
             }
@@ -745,10 +747,14 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
             };
             old_floor_block.tracker_forwards();
             old_floor_block.set_actual_floor_block(false);
-            self.pred_tree.update_tree(old_floor_block,
-                old_floor_block_index);
-            self.succ_tree.update_tree(old_floor_block,
-                old_floor_block_index);
+            self.pred_tree.update_tree(
+                old_floor_block,
+                old_floor_block_index
+            );
+            self.succ_tree.update_tree(
+                old_floor_block,
+                old_floor_block_index
+            );
 
             // New floor block adjustment
             let new_floor_block_index = new_floor_data.block_index;
@@ -760,8 +766,10 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
                 self.block_data.get_unchecked_mut(new_floor_block_index)
             };
             new_floor_block.set_actual_floor_block(true);
-            self.succ_tree.update_tree(new_floor_block,
-                new_floor_block_index);
+            self.succ_tree.update_tree(
+                new_floor_block,
+                new_floor_block_index
+            );
 
             self.actual_floor_block_index = new_floor_block_index;
             duplicates_to_skip -= 1;
@@ -939,13 +947,17 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         actual_block.ran_out_right = update_result.block_ran_out_right;
 
         if update_result.block_update_pred_tree {
-            self.pred_tree.update_tree(actual_block,
-                actual_block_index);
+            self.pred_tree.update_tree(
+                actual_block,
+                actual_block_index
+            );
         }
 
         if update_result.block_update_succ_tree {
-            self.succ_tree.update_tree(actual_block,
-                actual_block_index);
+            self.succ_tree.update_tree(
+                actual_block,
+                actual_block_index
+            );
         }
 
         if update_result.window_no_valid_succ {
@@ -1161,8 +1173,10 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
             self.block_data.get_unchecked_mut(new_floor_block_index)
         };
         new_floor_block.set_actual_floor_block(true);
-        self.succ_tree.update_tree(new_floor_block,
-            new_floor_data.block_index);
+        self.succ_tree.update_tree(
+            new_floor_block,
+            new_floor_data.block_index
+        );
 
         self.actual_floor_block_index = new_floor_data.block_index;
         self.actual_floor_value = new_floor_data.value;
@@ -1228,10 +1242,14 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         };
         old_floor_block.tracker_forwards();
         old_floor_block.set_actual_floor_block(false);
-        self.pred_tree.update_tree(old_floor_block,
-            old_floor_block_index);
-        self.succ_tree.update_tree(old_floor_block,
-            old_floor_block_index);
+        self.pred_tree.update_tree(
+            old_floor_block,
+            old_floor_block_index
+        );
+        self.succ_tree.update_tree(
+            old_floor_block,
+            old_floor_block_index
+        );
 
         // Adjustment of new Floor Block
         let new_floor_block_index = new_floor_data.block_index;
@@ -1243,8 +1261,10 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
             self.block_data.get_unchecked_mut(new_floor_block_index)
         };
         new_floor_block.set_actual_floor_block(true);
-        self.succ_tree.update_tree(new_floor_block,
-            new_floor_data.block_index);
+        self.succ_tree.update_tree(
+            new_floor_block,
+            new_floor_data.block_index
+        );
 
         // Adjustment of window
         self.actual_floor_block_index = new_floor_data.block_index;
@@ -1276,8 +1296,10 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
             self.block_data.get_unchecked_mut(old_floor_block_index)
         };
         old_floor_block.set_actual_floor_block(false);
-        self.succ_tree.update_tree(old_floor_block,
-            old_floor_block_index);
+        self.succ_tree.update_tree(
+            old_floor_block,
+            old_floor_block_index
+        );
 
         // New floor block
         let new_floor_block_index = new_floor_data.block_index;
@@ -1290,10 +1312,14 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         };
         new_floor_block.tracker_backwards();
         new_floor_block.set_actual_floor_block(true);
-        self.pred_tree.update_tree(new_floor_block,
-            new_floor_data.block_index);
-        self.succ_tree.update_tree(new_floor_block,
-            new_floor_data.block_index);
+        self.pred_tree.update_tree(
+            new_floor_block,
+            new_floor_data.block_index
+        );
+        self.succ_tree.update_tree(
+            new_floor_block,
+            new_floor_data.block_index
+        );
 
         // Window adjustment
         self.actual_floor_block_index = new_floor_data.block_index;
@@ -1335,12 +1361,14 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         for (index, block) in self.block_data.iter().enumerate() {
             // Invariant 4
             debug_assert_eq!(block.ran_out_right, block.tracker == block.length);
-            // Invariant 4
             debug_assert!(!(block.actual_floor_block && block.ran_out_right));
+
             // Invariant 2
-            debug_assert!(block.data[..block.length]
-                .windows(2)
-                .all(|w| w[0] <= w[1]));
+            // This check also tests if the `PLACE_HOLDER_VALUE` slots are sorted. Those equal
+            // `OrderedDouble::MAX`, so in sorted order they should always appear on the right side of
+            // the block `data`. Invalid values like `NaN` should be sorted at the same level as those
+            // place holders.
+            debug_assert!(block.data.is_sorted());
 
             if block.actual_floor_block {
                 floor_blocks += 1;
@@ -1351,6 +1379,12 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 
         // Invariant 10
         debug_assert_eq!(floor_blocks, 1);
+
+        // Invariant 9
+        self.pred_tree.debug_tree_invariant();
+
+        // Invariant 8
+        self.succ_tree.debug_tree_invariant();
 
         // Standard tests for correctness
         debug_assert!(self.actual_floor_block_index < self.block_data.len());
@@ -1790,6 +1824,41 @@ where
     }
 }
 
+// QuantileWindowTree Test
+impl<T> QuantileWindowTree<T>
+where
+    T: QuantileWindowTreeType {
+
+    // Only visible when debugging or running cargo --test
+    #[cfg(debug_assertions)]
+    fn debug_tree_invariant(
+        &self
+    ) {
+        let best_value = self.data[self.tree_leaves_starting_index..]
+            .iter()
+            .fold(T::DUMMY_VALUE,
+                |acc, node| {
+                    if T::is_better(node.value, acc) {
+                        node.value
+                    } else {
+                        acc
+                    }
+                });
+
+        let current_root = self.get_root();
+        debug_assert_eq!(
+            best_value,
+            current_root.value
+        );
+
+        let root_leaf = self.tree_leaves_starting_index + current_root.block_index;
+        debug_assert_eq!(
+            current_root.value,
+            self.data[root_leaf].value
+        );
+    }
+}
+
 pub mod block_size_dispatcher {
     //! Selects the `BLOCK_SIZE` used by [`crate::rolling_quantile_window`], depending on the
     //! requested window size.
@@ -1800,10 +1869,10 @@ pub mod block_size_dispatcher {
     //! Results vary between machines - the sizes chosen here were all measured on a
     //! MacBook Air M3.
     //!
-    //! The important point is that neither larger nor smaller blocks are better in
+    //! The important point is that neither larger or smaller blocks are better in
     //! general. The reasons are:
     //!
-    //! 1. The linear search and the shift performed inside a block, to locate the
+    //! 1. The linear searches and the shift performed inside a block, to locate the
     //!    outgoing value and move the incoming one to its sorted position. Larger
     //!    blocks mean more operations here.
     //! 2. The depth of the tournament trees - the deeper they are, the more
@@ -1817,8 +1886,8 @@ pub mod block_size_dispatcher {
     //! trees stay perfectly balanced. The calculation starts from the
     //! number of blocks, which follows from the window size and the
     //! given `BLOCK_SIZE`. Because of the rounding, the leaf count of a
-    //! tree always stays within a fixed range - the range between two
-    //! consecutive powers of `K_ARY`. Crossing such a range therefore
+    //! tree always stays within a fixed range. In general the range between
+    //! two consecutive powers of `K_ARY`. Crossing such a range therefore
     //! adds an entire new level at once. In terms of the window size
     //! this gives:
     //!
@@ -1846,8 +1915,7 @@ pub mod block_size_dispatcher {
     //! [`BORDER_FOR_B32`]. Each marks the point at which the
     //! corresponding block size starts to lose against the next larger
     //! one, even at equal depth. 64 turned out to be the largest useful
-    //! block size - larger ones such as 128 yielded no gain in any
-    //! benchmark. [`get_suitable_std_block_size`] implements what is
+    //! block size. [`get_suitable_std_block_size`] implements what is
     //! described here.
 
     use crate::window::quantile_window::{
@@ -1867,15 +1935,12 @@ pub mod block_size_dispatcher {
         let b64_metadata = StdBlockSizes::B64.calculate_metadata(window_size);
 
         if b16_metadata.needed_blocks > BORDER_FOR_B16 {
-            if b32_metadata.needed_blocks > BORDER_FOR_B32 {
+            if b32_metadata.needed_blocks > BORDER_FOR_B32 ||
+                b64_metadata.needed_tree_buffer_length < b32_metadata.needed_tree_buffer_length {
                 return StdBlockSizes::B64;
             }
 
-            if b64_metadata.needed_tree_buffer_length == b32_metadata.needed_tree_buffer_length {
-                return StdBlockSizes::B32;
-            }
-
-            return StdBlockSizes::B64;
+            return StdBlockSizes::B32;
         }
 
         if b16_metadata.needed_tree_buffer_length <= b32_metadata.needed_tree_buffer_length {
@@ -1926,7 +1991,7 @@ pub mod block_size_dispatcher {
     }
 }
 
-// Main functions
+// Main function
 pub fn rolling_window<const BLOCK_SIZE: usize>(
     input_array: &[f64],
     window_size: usize,
@@ -2379,9 +2444,9 @@ mod tests {
         let (left_side, expected_floor_value, right_side) =
             test_input.select_nth_unstable_by(expected_floor_rank, |x, y| x.total_cmp(y));
 
-        let expected_predeccessor_value =
-            left_side.iter()
-                .max_by(|x, y| x.total_cmp(y));
+        let expected_predeccessor_value = left_side
+            .iter()
+            .max_by(|x, y| x.total_cmp(y));
         let result_predeccessor_value = test_window.pred_tree.get_root().value;
         match expected_predeccessor_value {
             Some(value) => {
@@ -2392,9 +2457,9 @@ mod tests {
             }
         }
 
-        let expected_successor_value =
-            right_side.iter()
-                .min_by(|x, y| x.total_cmp(y));
+        let expected_successor_value = right_side
+            .iter()
+            .min_by(|x, y| x.total_cmp(y));
         let result_successor_value = test_window.succ_tree.get_root().value;
         match expected_successor_value {
             Some(value) => {
