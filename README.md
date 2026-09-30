@@ -27,12 +27,14 @@ These local movements are accumulated into a single global delta. A delta of one
 
 The dominant work per step is:
 
-* one linear scan and shift inside a single block, bounded by the length of the block.
-* one leaf-to-root update in each tree, bounded by the tree depth.
+* linear scans and a shift inside a single block, bounded by the length of the block.
+* possible leaf-to-root updates in the trees, bounded by the tree depth.
 
-Both bounds depend on the window size only, never on the length of the input. The decisive difference from an order statistic tree is what the trees actually hold. An order statistic tree stores every value in the window, so it grows with `w`. The tournament trees store one entry per *block* — in other words `w / BLOCK_SIZE` of them — which reduces their depth to `O(log(w / BLOCK_SIZE))`. As a result, the tree structure that has to be traversed on every step is small enough that more of it stays in cache.
+Both bounds depend on the window size only, never on the length of the input. The decisive difference from an order statistic tree is what the trees actually hold. An order statistic tree stores every value in the window, so it grows with `w`. The tournament trees store one entry per *block* — in other words `w / BLOCK_SIZE` of them — which reduces their depth to `O(log(w / BLOCK_SIZE))`. As a result, the tree structure that has to be traversed at each step is small enough that the chance of it staying in cache is higher.
 
-The price is paid inside the block: locating the outgoing value and inserting the incoming value is a linear scan and shift over up to `BLOCK_SIZE` values. Hence the cost per step is `O(BLOCK_SIZE + log(w / BLOCK_SIZE))` rather than `O(log w)`. This means more raw work, but in exchange that work happens on contiguous memory instead of chasing references through a structure that keeps rearranging itself.
+The price is paid inside the block: locating the outgoing value and inserting the incoming value are linear scans and a shift over up to `BLOCK_SIZE` values. Hence the cost per step is `O(BLOCK_SIZE)` + `O(log(w / BLOCK_SIZE))` per tree update rather than `O(log w)`. This means more raw work, but in exchange that work happens on contiguous memory instead of chasing references through a structure that keeps rearranging itself.
+
+In addition, the blocks are arranged in the form of a circular buffer on contiguous memory. Every time a block updates its number of values (mostly equal to `BLOCK_SIZE`, only exception is the last block), the process advances to the next block (the immediate neighbor of the previous block). Only when all existing blocks have been updated does the cycle repeat, continuing until all elements of the input data have passed through the window. The queue is updated in the exact same manner.
 
 ## Features
 
@@ -67,7 +69,7 @@ cargo bench --bench rolling -- std_bench
 
 This suite performs measurements regarding the influence of different input lengths, different distributions, and various quantiles.
 
-The following reported performance metrics are the median of four repetitions First things first: The three measurements below share a comparable base line. Each one of them holds a cell with a measure of an input length of 20 000 000, a window size of 1000, a quantile of 0.5, and a continuous distribution. Consequently, this base line is measured three times independently, with results of 30.8 M/s, 30.7 M/s and 30.8 M/s. Therefore the resulting spread between those measurements can be interpreted as a measure of run-to-run
+The following reported performance metrics are the median of four repetitions. First things first: The three measurements below share a comparable base line. Each one of them holds a cell with a measure of an input length of 20 000 000, a window size of 1000, a quantile of 0.5, and a continuous distribution. Consequently, this base line is measured three times independently, with results of 30.8 M/s, 30.7 M/s and 30.8 M/s. Therefore the resulting spread between those measurements can be interpreted as a measure of run-to-run
 reproducibility.
 
 ### Length dependence performance
@@ -113,7 +115,7 @@ As can be seen, the computation gains performance toward the outer quantiles. Th
 
 ### Standard dispatcher
 
-In this case, the `BLOCK_SIZE` is chosen for you automatically. A larger `BLOCK_SIZE` makes the scan inside a block more expensive but produces fewer blocks and therefore shallower trees. Which side dominates depends on the window size, so `rolling_quantile_window` derives the block size from the tree metadata that the window size implies and selects between sizes of 16, 32 and 64.
+In this case, the `BLOCK_SIZE` is chosen for you automatically. A larger `BLOCK_SIZE` makes the scan inside a block more expensive but produces fewer blocks and therefore shallower trees. Which side dominates depends on the window size, so `rolling_quantile_window` derives the block size from the metadata that the window size implies and selects between sizes of 16, 32 and 64.
 
 ```rust
 use quantile_window::rolling_quantile_window;
@@ -132,7 +134,7 @@ assert_eq!(&medians, &[2.0, 2.5, 4.0, 5.5]);
 
 ### Choose your own `BLOCK_SIZE`
 
-`rolling_quantile_window_generic` exposes the `BLOCK_SIZE` as a const generic Use it for benchmarking or for a workload whose window size is known in advance:
+`rolling_quantile_window_generic` exposes the `BLOCK_SIZE` as a const generic. Use it for benchmarking or for a workload whose window size is known in advance:
 
 ```rust
 use quantile_window::rolling_quantile_window_generic;
@@ -161,3 +163,5 @@ Licensed under either of:
 * Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
   <http://www.apache.org/licenses/LICENSE-2.0>)
 * MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option.
