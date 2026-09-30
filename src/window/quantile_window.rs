@@ -269,8 +269,8 @@
 //!     `actual_floor_block_index`.
 //! 11. The sum of all block trackers equals `actual_floor_rank`.
 //!
-//! Invariants 1, 2, 4, 8, 9, 10 and 11 are checked after every update in debug builds
-//! by [`QuantileWindow::debug_update_window_invariants`].
+//! Invariants 2, 4, 10 and 11 are checked after every update in debug builds by
+//! [`QuantileWindow::debug_update_window_invariants`].
 
 use std::{marker::PhantomData};
 
@@ -296,7 +296,7 @@ struct QuantileWindow<const BLOCK_SIZE: usize> {
     actual_floor_rank: usize,
     actual_floor_value: OrderedDouble,
 
-    // Index of the block that currently holds the global floor value. Exactly one
+    // Index of the block that currently holds the `actual_floor_value`. Exactly one
     // block carries the `actual_floor_block` flag and this is its position. Only
     // ever assigned from a block index that was already in range.
     actual_floor_block_index: usize,
@@ -304,7 +304,7 @@ struct QuantileWindow<const BLOCK_SIZE: usize> {
 
     // Index of the block that needs to be updated. It advances by one each time a
     // block has been fully updated, and wraps back to 0 instead of ever reaching
-    // `block_data.len()`.
+    // `block_data.len()`. For more information look into function `update_tracked_block`.
     actual_block: usize,
     block_data: Vec<QuantileWindowBlock<BLOCK_SIZE>>,
     queue_data: Vec<OrderedDouble>,
@@ -325,7 +325,9 @@ struct QuantileWindowBlock<const BLOCK_SIZE: usize> {
 
 impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
 
-    fn sort(&mut self) {
+    fn sort(
+        &mut self
+    ) {
         // The remainder is always empty: a `const` block in `rolling_window` guarantees at
         // compile time that `BLOCK_SIZE` is a multiple of `SORTING_NETWORK_SIZE`.
         let chunks = self.data.as_chunks_mut::<SORTING_NETWORK_SIZE>().0;
@@ -337,7 +339,9 @@ impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
     }
 
     #[inline(always)]
-    fn tracker_forwards(&mut self) {
+    fn tracker_forwards(
+        &mut self
+    ) {
         self.tracker += 1;
         if self.tracker == self.length {
             self.ran_out_right = true;
@@ -345,20 +349,25 @@ impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
     }
 
     #[inline(always)]
-    fn tracker_backwards(&mut self) {
+    fn tracker_backwards(
+        &mut self
+    ) {
         self.tracker -= 1;
         self.ran_out_right = false;
     }
 
     #[inline(always)]
-    fn get_predeccessor_value(&self) -> OrderedDouble {
+    fn get_predeccessor_value(
+        &self
+    ) -> OrderedDouble {
         let current_block_tracker = self.tracker;
         if self.ran_out_right {
             debug_assert_eq!(current_block_tracker, self.length);
 
             // SAFETY: block lengths are immutable after the initial fill and
             // every existing block holds at least one element in `ran_out_right`
-            // state, so `length - 1` cannot underflow.
+            // state, so `length - 1` cannot underflow. For more information on
+            // `ran_out_right` see invariant 4.
             unsafe {
                 *self.data.get_unchecked(self.length - 1)
             }
@@ -368,8 +377,8 @@ impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
             debug_assert!(current_block_tracker < self.length);
 
             // SAFETY: `tracker == 0` is handled above, and this branch only runs when the
-            // block has not run out to the right - so `tracker < length` and `tracker - 1`
-            // is a valid index.
+            // block has not run out to the right. This implies `tracker < length` and therefore
+            // `tracker - 1` is a valid index.
             unsafe {
                 *self.data.get_unchecked(current_block_tracker - 1)
             }
@@ -377,13 +386,17 @@ impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
     }
 
     #[inline(always)]
-    fn get_successor_value(&self) -> OrderedDouble {
+    fn get_successor_value(
+        &self
+    ) -> OrderedDouble {
         let succ_index = self.get_successor_index();
         if succ_index < self.length {
-            // SAFETY: guarded by `succ_index < self.length` directly above. The floor block
-            // never enters `ran_out_right` (invariant 4), which is what keeps
-            // `get_successor_index` from returning a position inside the buffer for a block
-            // that has run out.
+            // SAFETY: guarded by `succ_index < self.length` directly above. When the block
+            // is in `ran_out_right` state, `succ_index` equals `self.length`, which will
+            // return `SUCC_DUMMY_VALUE`. In addition the floor block never enters `ran_out_right`
+            // (invariant 4). If the floor block's tracker points to the last valid value,
+            // `get_successor_index` would return `self.tracker` + 1, which equals `self.length`
+            // and therefore returns `SUCC_DUMMY_VALUE`.
             unsafe {
                 *self.data.get_unchecked(succ_index)
             }
@@ -393,7 +406,9 @@ impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
     }
 
     #[inline(always)]
-    fn get_successor_index(&self) -> usize {
+    fn get_successor_index(
+        &self
+    ) -> usize {
         let current_block_tracker = self.tracker;
         if self.actual_floor_block {
             current_block_tracker + 1
@@ -405,7 +420,10 @@ impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
     }
 
     #[inline(always)]
-    fn set_actual_floor_block(&mut self, is_actual_floor_block: bool) {
+    fn set_actual_floor_block(
+        &mut self,
+        is_actual_floor_block: bool
+    ) {
         self.actual_floor_block = is_actual_floor_block;
     }
 }
@@ -442,7 +460,10 @@ struct QuantileWindowUpdateResult {
 
 impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 
-    fn new(window_size: usize, quantile: f64) -> Self {
+    fn new(
+        window_size: usize,
+        quantile: f64
+    ) -> Self {
         let needed_blocks = quantilewindow_utils::calculate_needed_blocks::<BLOCK_SIZE>(window_size);
         let needed_queue_size = window_size;
 
@@ -471,7 +492,10 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         }
     }
 
-    fn add(&mut self, value: OrderedDouble) {
+    fn add(
+        &mut self,
+        value: OrderedDouble
+    ) {
         let current_block =
             if self.block_data[self.actual_block].length == BLOCK_SIZE {
                 self.actual_block += 1;
@@ -490,7 +514,9 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         }
     }
 
-    fn finish_fill_get_first_result(&mut self) -> f64 {
+    fn finish_fill_get_first_result(
+        &mut self
+    ) -> f64 {
         self.actual_block = 0;
         if self.empty() {
             return f64::NAN;
@@ -501,7 +527,9 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
     }
 
     // Prepare
-    fn prepare(&mut self) {
+    fn prepare(
+        &mut self
+    ) {
         self.initial_sort();
 
         let current_size = self.valid_size();
@@ -538,13 +566,18 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         target_floor_block.set_actual_floor_block(true);
     }
 
-    fn initial_sort(&mut self) {
+    fn initial_sort(
+        &mut self
+    ) {
         self.block_data
             .iter_mut()
             .for_each(|block| block.sort());
     }
 
-    fn find_value_by_rank(&self, searched_rank: usize) -> QuantileWindowSelectionResult {
+    fn find_value_by_rank(
+        &self,
+        searched_rank: usize
+    ) -> QuantileWindowSelectionResult {
         let blocks_len = self.block_data.len();
 
         let mut selection_helpers: Vec<QuantileWindowSelectionHelper> = Vec::with_capacity(blocks_len);
@@ -660,7 +693,10 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         }
     }
 
-    fn initialize_block_tracker(&mut self, floor_value_canidate: QuantileWindowSelectionCandidate) {
+    fn initialize_block_tracker(
+        &mut self,
+        floor_value_canidate: QuantileWindowSelectionCandidate
+    ) {
         for (index, block) in self.block_data.iter_mut().enumerate() {
             // This if clause seems to be necessary for performance. It just ensures that if there are
             // any duplicates of the floor value in the data buffer of the floor block that the tracker
@@ -690,7 +726,10 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         }
     }
 
-    fn skip_duplicates(&mut self, duplicates_to_skip: usize) {
+    fn skip_duplicates(
+        &mut self,
+        duplicates_to_skip: usize
+    ) {
         let mut duplicates_to_skip = duplicates_to_skip;
         while duplicates_to_skip > 0 {
             let new_floor_data = self.succ_tree.get_root();
@@ -789,7 +828,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         let actual_block_index = self.actual_block;
         debug_assert!(actual_block_index < self.block_data.len());
 
-        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`
+        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`.
         let actual_block = unsafe {
             self.block_data.get_unchecked(actual_block_index)
         };
@@ -819,7 +858,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         let actual_block_index = self.actual_block;
         debug_assert!(actual_block_index < self.block_data.len());
 
-        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`
+        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`.
         let actual_block = unsafe {
             self.block_data.get_unchecked_mut(actual_block_index)
         };
@@ -863,7 +902,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         let actual_block_index = self.actual_block;
         debug_assert!(actual_block_index < self.block_data.len());
 
-        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`
+        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`.
         let actual_block = unsafe {
             self.block_data.get_unchecked_mut(actual_block_index)
         };
@@ -891,7 +930,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         let actual_block_index = self.actual_block;
         debug_assert!(actual_block_index < self.block_data.len());
 
-        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`
+        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`.
         let actual_block = unsafe {
             self.block_data.get_unchecked_mut(actual_block_index)
         };
@@ -928,7 +967,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         debug_assert!(actual_block_index < self.block_data.len());
 
         // SAFETY: `actual_block` never leaves the range of `block_data`. This function is
-        // the only place that advances it: once a block has been fully updated it moves on,
+        // the only place that advances it. Once a block has been fully updated it moves on,
         // and instead of ever reaching `block_data.len()` it is reset to 0.
         let actual_block = unsafe {
             self.block_data.get_unchecked_mut(actual_block_index)
@@ -955,7 +994,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         let actual_block_index = self.actual_block;
         debug_assert!(actual_block_index < self.block_data.len());
 
-        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`
+        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`.
         let actual_block = unsafe {
             self.block_data.get_unchecked(actual_block_index)
         };
@@ -1049,7 +1088,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         let actual_block_index = self.actual_block;
         debug_assert!(actual_block_index < self.block_data.len());
 
-        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`
+        // SAFETY: `actual_block` is kept below `block_data.len()` by function `update_tracked_block`.
         let actual_block = unsafe {
             self.block_data.get_unchecked(actual_block_index)
         };
@@ -1280,8 +1319,12 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 // QuantileWindow Test
 impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 
+    // Only visible when debugging or running cargo --test
     #[cfg(debug_assertions)]
-    fn debug_update_window_invariants(&self) {
+    fn debug_update_window_invariants(
+        &self
+    ) {
+        // Invariant 11
         debug_assert_eq!(self.block_data
             .iter()
             .fold(0, |acc, block| {
@@ -1290,19 +1333,26 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 
         let mut floor_blocks = 0;
         for (index, block) in self.block_data.iter().enumerate() {
+            // Invariant 4
             debug_assert_eq!(block.ran_out_right, block.tracker == block.length);
+            // Invariant 4
             debug_assert!(!(block.actual_floor_block && block.ran_out_right));
+            // Invariant 2
             debug_assert!(block.data[..block.length]
                 .windows(2)
                 .all(|w| w[0] <= w[1]));
 
             if block.actual_floor_block {
                 floor_blocks += 1;
+                // Invariant 10
                 debug_assert_eq!(index, self.actual_floor_block_index);
             }
         }
 
+        // Invariant 10
         debug_assert_eq!(floor_blocks, 1);
+
+        // Standard tests for correctness
         debug_assert!(self.actual_floor_block_index < self.block_data.len());
         debug_assert!(self.invalid_count <= self.element_count);
     }
@@ -1339,6 +1389,7 @@ mod quantilewindow_utils {
         debug_assert!(!data.is_empty());
         debug_assert!(old_value_index < data.len());
         debug_assert!(new_value < data[old_value_index]);
+        debug_assert!(data.is_sorted());
 
         let new_value_index = data.iter().filter(|&&x| x <= new_value).count();
         debug_assert!(new_value_index <= old_value_index);
@@ -1368,9 +1419,12 @@ mod quantilewindow_utils {
         debug_assert!(!data.is_empty());
         debug_assert!(old_value_index < data.len());
         debug_assert!(new_value > data[old_value_index]);
+        debug_assert!(data.is_sorted());
 
         // This ensures that atleast the value at `old_value_index` lies left from
         // the `new_value` - so the calculation of `new_value_index` wont underflow.
+        // Therefore it is neccessary that the `data` array is sorted, which is
+        // asserted above.
         debug_assert!(data.iter().filter(|&&x| x < new_value).count() >= 1);
 
         // The `-1` is necessary, because `.count()` will return the positon of the
@@ -1454,12 +1508,13 @@ struct QuantileWindowTreeNode {
     value: OrderedDouble,
 
     // Every leaf receives its index from a loop over `0..needed_blocks` in
-    // `pre_initialize_tree_buffer`, so it is valid by construction; padding nodes keep
+    // `pre_initialize_tree_buffer`, so it is valid by construction – padding nodes keep
     // the initial 0. No other code ever assigns `block_index` - `update_tree` copies
-    // whole nodes toward the root and therefore only propagates indices that are
+    // whole nodes towards the root and therefore only propagates indices that are
     // already valid.
-    // The caller's `got_invalid_root` check guards correctness, not memory safety: an
-    // invalid root carries index 0, which is in range but is not the block we want.
+    // The caller's `got_invalid_root` check guards correctness, not memory safety.
+    // Therefore an invalid node carries index 0. Invalid nodes are marked by the
+    // individual `DUMMY_VALUE` of each tree type. See trait `QuantileWindowTreeType`.
     block_index: usize,
 }
 
@@ -1472,12 +1527,16 @@ where
 }
 
 trait QuantileWindowTreeType {
+    // Marks invalid nodes.
     const DUMMY_VALUE: OrderedDouble;
 
     fn get_corresponding_value<const BLOCK_SIZE: usize>(
         target_block: &QuantileWindowBlock<BLOCK_SIZE>
     ) -> OrderedDouble;
-    fn is_better(value_one: OrderedDouble, value_two: OrderedDouble) -> bool;
+    fn is_better(
+        value_one: OrderedDouble,
+        value_two: OrderedDouble
+    ) -> bool;
 }
 
 struct QuantileWindowPredeccessorTree;
@@ -1492,7 +1551,10 @@ impl QuantileWindowTreeType for QuantileWindowPredeccessorTree {
     }
 
     #[inline(always)]
-    fn is_better(value_one: OrderedDouble, value_two: OrderedDouble) -> bool {
+    fn is_better(
+        value_one: OrderedDouble,
+        value_two: OrderedDouble
+    ) -> bool {
         value_one > value_two
     }
 }
@@ -1509,7 +1571,10 @@ impl QuantileWindowTreeType for QuantileWindowSuccessorTree {
     }
 
     #[inline(always)]
-    fn is_better(value_one: OrderedDouble, value_two: OrderedDouble) -> bool {
+    fn is_better(
+        value_one: OrderedDouble,
+        value_two: OrderedDouble
+    ) -> bool {
         value_one < value_two
     }
 }
@@ -1518,7 +1583,9 @@ impl<T> QuantileWindowTree<T>
 where
     T: QuantileWindowTreeType {
 
-    fn new(needed_blocks: usize) -> Self {
+    fn new(
+        needed_blocks: usize
+    ) -> Self {
         let tree_metadata = quantilewindow_tree_utils::tree_calculate_metadata(
             needed_blocks
         );
@@ -1579,8 +1646,8 @@ where
 
             // SAFETY: `current_index` starts at the last internal node and only ever decreases
             // until it reaches the root, so it stays inside the buffer. `target_node_index` is
-            // one of the `K_ARY` children of that node - all of which exist because the number of
-            // leaves is rounded up to the next power of `K_ARY` - and therefore lies between
+            // one of the `K_ARY` children of that node. All of them exist because the number of
+            // leaves is rounded up to the next power of `K_ARY`. Therefore it lies between
             // `current_index` and `data.len()`.
             unsafe {
                 *self.data.get_unchecked_mut(current_index) = *self.data.get_unchecked(target_node_index);
@@ -1598,18 +1665,16 @@ where
         &self,
         position: usize
     ) -> usize {
-        // `position` is always an internal node - `initialize_tree` walks the levels above
+        // `position` is always an internal node. For instance: `initialize_tree` walks the levels above
         // the leaves and `update_tree` passes a parent index.
         debug_assert!(position < self.tree_leaves_starting_index);
 
         let first_child = quantilewindow_tree_utils::tree_child_index(position, 1);
-
         // The tree is perfect, so an internal node has all `K_ARY` children present and the
         // last of them is still inside the buffer.
         debug_assert!((first_child + K_ARY - 1) < self.data.len());
 
         let mut best = first_child;
-
         // SAFETY: The number of leaves is rounded up to the next power of `K_ARY`, so the tree is
         // perfect and an internal node has all `K_ARY` children present.
         let mut best_value = unsafe {
@@ -1647,9 +1712,10 @@ where
         debug_assert!(target_node_index < self.data.len());
 
         // SAFETY: every caller passes the index of a block in `block_data`, and the tree
-        // holds one leaf per block - the leaf count is rounded up to the next power of
-        // `K_ARY`, so it is at least `block_data.len()`. `target_node_index` therefore
-        // addresses a leaf of this tree.
+        // holds one leaf per block. The leaf count is mostly rounded up to the next power
+        // of `K_ARY`. If it is not, the number of blocks fits perfectly into `self.data.len()` -
+        // `self.tree_leaves_starting_index`, making it a valid index within bounds (up to self.data.len() - 1).
+        // `target_node_index` therefore addresses a leaf of this tree.
         let current_node = unsafe {
             let current_node = self.data.get_unchecked_mut(target_node_index);
             current_node.value = corresponding_value;
