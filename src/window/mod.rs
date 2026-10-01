@@ -10,10 +10,27 @@ mod utils;
 
 const QUANTILE_EPSILON: f64 = 1e-9;
 
+/// The only error type in this implementation. Both public entrypoints ([`rolling_quantile_window`] and
+/// [`rolling_quantile_window_generic`]) can return a [`WindowError`] in case their input is not valid.
+/// The input checks happen inside of [`rolling_quantile_window_generic`], the function [`rolling_quantile_window`]
+/// is just a wrapper around the generic function with precomputed `BLOCK_SIZE`. During the rolling phase/update
+/// phase – i.e. the phase, where values go inside and outside – no [`WindowError`]s can happen. In addition
+/// [`WindowError`] derives from [`Debug`], [`PartialEq`] and [`Eq`].
 #[derive(Debug, PartialEq, Eq)]
 pub enum WindowError {
+    /// The [`WindowError::InputArrayIsEmptyError`] gets returned when the input data array is empty – i.e.
+    /// `input_array.is_empty()`. In addition if the input data array is empty and the `window_size` bigger
+    /// than zero this would imply also a [`WindowError::SizingError`].
     InputArrayIsEmptyError,
-    SizingError,
+
+    /// The [`WindowError::SizingError`] gets returned when the entered `window_size` is equal to zero or the
+    /// `window_size` is bigger than `input_array.len()` – i.e. `window_size` > `input_array.len()`. In each case the
+    /// corresponding [`SizingErrorType`] is returned.
+    SizingError(SizingErrorType),
+
+    /// The [`WindowError::InvalidQuantileError`] gets returned when the entered `quantile` is not valid. A valid
+    /// `quantile` is not [`f64::NAN`], finite, in the valid range of [`0.0, 1.0`] and also has not more than two
+    /// decimal places.
     InvalidQuantileError,
 }
 
@@ -22,15 +39,39 @@ impl Display for WindowError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             WindowError::InputArrayIsEmptyError => write!(f, "InputArrayIsEmptyError: It seems the \
-                input array is empty"),
-            WindowError::SizingError => write!(f, "SizingError: It seems you entered a wrong size"),
+                input array is empty."),
+            WindowError::SizingError(t) => write!(f, "SizingError: {}", t),
             WindowError::InvalidQuantileError => write!(f, "InvalidQuantileError: \
-                It seems you entered an invalid quantile"),
+                It seems you entered an invalid quantile."),
         }
     }
 }
 
 impl std::error::Error for WindowError {}
+
+/// [`SizingErrorType`] is a specification for the [`WindowError::SizingError`], because it can be the result
+/// of two different causes. [`WindowError::SizingError`] covers two variants of errors in connection with input
+/// sizes.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SizingErrorType {
+    /// [`SizingErrorType::EqualToZero`] gets returned when the input `window_size` is equal to zero.
+    EqualToZero,
+
+    /// [`SizingErrorType::WindowSizeTooBig`] gets returned when the input `window_size` is bigger than
+    /// `input_array.len()`.
+    WindowSizeTooBig
+}
+
+impl Display for SizingErrorType {
+
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SizingErrorType::EqualToZero => write!(f, "The entered window size seems to be zero."),
+            SizingErrorType::WindowSizeTooBig => write!(f, "The entered window size seems to be bigger \
+                than the entered input data length."),
+        }
+    }
+}
 
 /// Computes a rolling quantile over an input slice/array.
 ///
@@ -67,7 +108,8 @@ impl std::error::Error for WindowError {}
 /// Returns a [`WindowError`] if:
 /// * `input_array` is empty ([`WindowError::InputArrayIsEmptyError`]).
 /// * `window_size` is 0 or larger than `input_array.len()` ([`WindowError::SizingError`]).
-/// * `quantile` is outside the valid range ([`0.0, 1.0`]) ([`WindowError::InvalidQuantileError`]).
+/// * `quantile` is equal to [`f64::NAN`], infinite, outside the valid range of ([`0.0, 1.0`]) or
+///   has more than two decimal places ([`WindowError::InvalidQuantileError`]).
 ///
 /// # Example
 /// ```
@@ -162,7 +204,8 @@ pub fn rolling_quantile_window(
 /// Returns a [`WindowError`] if:
 /// * `input_array` is empty ([`WindowError::InputArrayIsEmptyError`]).
 /// * `window_size` is 0 or larger than `input_array.len()` ([`WindowError::SizingError`]).
-/// * `quantile` is outside the valid range ([`0.0, 1.0`]) ([`WindowError::InvalidQuantileError`]).
+/// * `quantile` is equal to [`f64::NAN`], infinite, outside the valid range of ([`0.0, 1.0`]) or
+///   has more than two decimal places ([`WindowError::InvalidQuantileError`]).
 ///
 /// # Example
 /// ```
@@ -187,8 +230,12 @@ pub fn rolling_quantile_window_generic<const BLOCK_SIZE: usize>(
         return Err(WindowError::InputArrayIsEmptyError);
     }
 
-    if window_size == 0 || window_size > input_array.len() {
-        return Err(WindowError::SizingError);
+    if window_size == 0 {
+        return Err(WindowError::SizingError(SizingErrorType::EqualToZero));
+    }
+
+    if window_size > input_array.len() {
+        return Err(WindowError::SizingError(SizingErrorType::WindowSizeTooBig));
     }
 
     if !valid_quantile(quantile) {
@@ -222,9 +269,7 @@ fn valid_quantile(quantile: f64) -> bool {
 #[cfg(test)]
 mod test {
     use crate::window::{
-        rolling_quantile_window_generic,
-        valid_quantile,
-        WindowError
+        SizingErrorType, WindowError, rolling_quantile_window_generic, valid_quantile
     };
 
     const TESTED_QUANTILES: [(f64, bool); 12] = [
@@ -258,14 +303,14 @@ mod test {
             0,
             0.5
         );
-        assert!(call_result.err().unwrap() == WindowError::SizingError);
+        assert!(call_result.err().unwrap() == WindowError::SizingError(SizingErrorType::EqualToZero));
 
         let call_result = rolling_quantile_window_generic::<16>(
             &test_input,
             16,
             0.5
         );
-        assert!(call_result.err().unwrap() == WindowError::SizingError);
+        assert!(call_result.err().unwrap() == WindowError::SizingError(SizingErrorType::WindowSizeTooBig));
 
         let call_result = rolling_quantile_window_generic::<16>(
             &test_input,
