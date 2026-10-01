@@ -163,6 +163,6 @@ The computation can fail if an invalid input is given. In those cases a `WindowE
 Licensed under either of:
 
 * Apache License, Version 2.0 (<https://github.com/JensT1999/quantile_window/blob/main/LICENSE-APACHE> OR <http://www.apache.org/licenses/LICENSE-2.0>)
-* MIT license (<https://github.com/JensT1999/quantile_window/blob/main/LICENSE-MIT> or <http://opensource.org/licenses/MIT>)
+* MIT license (<https://github.com/JensT1999/quantile_window/blob/main/LICENSE-MIT> OR <http://opensource.org/licenses/MIT>)
 
 at your option.
