@@ -69,7 +69,9 @@ cargo bench --bench rolling -- std_bench
 
 This suite performs measurements regarding the influence of different input lengths, different distributions, and various quantiles.
 
-The following reported performance metrics are the median of four repetitions. First things first: The three measurements below share a comparable base line. Each one of them holds a cell with a measure of an input length of 20 000 000, a window size of 1000, a quantile of 0.5, and a continuous distribution. Consequently, this base line is measured three times independently, with results of 30.8 M/s, 30.7 M/s and 30.8 M/s. Therefore the resulting spread between those measurements can be interpreted as a measure of run-to-run
+The following reported performance metrics are the fastest of four repetitions.
+
+First things first: The three measurements below share a comparable base line. Each one of them holds a cell with a measure of an input length of 20 000 000, a window size of 1000, a quantile of 0.5, and a continuous distribution. Consequently, this base line is measured three times independently, with results of 30.0 M/s, 30.0 M/s and 29.9 M/s. Therefore the resulting spread between those measurements can be interpreted as a measure of run-to-run
 reproducibility.
 
 ### Length dependence performance
@@ -78,24 +80,24 @@ Configuration: window 1000, quantile 0.5, continuous between `[-1000.0..1000.0]`
 
 | input length | 5 000 000 | 10 000 000 | 20 000 000 |
 |---|---|---|---|
-| throughput | 30.2 M/s | 30.7 M/s | 30.8 M/s |
+| throughput | 30.1 M/s | 30.1 M/s | 30.0 M/s |
 
 As can be seen, the length of the input data is irrelevant to the throughput of the window. Despite a fourfold increase in input length across the columns, no big effect is measurable.
 
 ### NaN handling performance
 
-Configuration: input length 20 000 000, quantile 0.5, continuous between `[-1000.0..1000.0]`, nan ratio 0.2 and nan ratio 0.4, without nan matches a continuous distribution between `[-1000.0..1000.0]`
+Configuration: input length 20 000 000, quantile 0.5, continuous between `[-1000.0..1000.0]`, `NaN` ratio 0.2 and `NaN` ratio 0.4, without `NaN` matches a continuous distribution between `[-1000.0..1000.0]`
 
 | window | with nan (0.2) | with nan (0.4) | without nan |
 |---|---|---|---|
-| 100 | 30.0 M/s | 32.5 M/s | 32.0 M/s |
-| 1000 | 29.5 M/s | 31.4 M/s | 30.7 M/s |
-| 10000 | 26.6 M/s | 29.8 M/s | 27.7 M/s |
-| 100000 | 26.3 M/s | 28.4 M/s | 27.0 M/s |
-| 1000000 | 25.9 M/s | 28.1 M/s | 26.5 M/s |
-| 2000000 | 24.8 M/s | 26.7 M/s | 25.4 M/s |
+| 100 | 29.3 M/s | 31.4 M/s | 31.7 M/s |
+| 1000 | 28.9 M/s | 31.1 M/s | 30.0 M/s |
+| 10000 | 27.0 M/s | 29.1 M/s | 27.6 M/s |
+| 100000 | 26.3 M/s | 28.4 M/s | 26.9 M/s |
+| 1000000 | 26.2 M/s | 28.2 M/s | 26.5 M/s |
+| 2000000 | 25.0 M/s | 27.1 M/s | 25.5 M/s |
 
-As can be seen, a higher number of missing values in the form of `NaN`s accelerates computation. However, it is also apparent that this only holds true once the percentage of `NaN`s relative to the input data reaches a certain threshold. In contrast to the distribution without `NaN`s, a `NaN` ratio of 0.2 results in a slightly slower processing speed, whereas a `NaN` ratio of 0.4 shows a performance gain over it.
+As can be seen, a higher number of missing values in the form of `NaN`s accelerates computation. However, it is also apparent that this only holds true once the percentage of `NaN`s relative to the input data reaches a certain threshold. In contrast to the distribution without `NaN`s, a `NaN` ratio of 0.2 results in a slower processing speed, whereas a `NaN` ratio of 0.4 shows a performance gain over it. The only exception is the window with a size of 100, where the without `NaN` distribution is the fastest.
 
 ### Different quantiles performance
 
@@ -103,11 +105,11 @@ Configuration: window 1000, input length 20 000 000, continuous between `[-1000.
 
 | quantile | throughput |
 |---|---|
-| 0.0 | 39.8 M/s |
-| 0.25 | 31.0 M/s |
-| 0.5 | 30.8 M/s |
-| 0.75 | 31.2 M/s |
-| 1.0 | 40.9 M/s |
+| 0.0 | 39.5 M/s |
+| 0.25 | 30.7 M/s |
+| 0.5 | 29.9 M/s |
+| 0.75 | 30.7 M/s |
+| 1.0 | 40.3 M/s |
 
 As can be seen, the computation gains performance toward the outer quantiles. The median therefore represents the **worst-case** scenario across the entire spectrum of possible quantiles.
 

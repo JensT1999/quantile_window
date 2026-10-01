@@ -827,7 +827,7 @@ fn build_window_size_dist_benchmark_table(
         .map(|item| {
             let formatted_metrics = format!(
                 "{} - {}",
-                item.1.formatted_median_metric(),
+                item.1.formatted_fastest_metric(),
                 item.1.formatted_spread_metric()
             );
 
