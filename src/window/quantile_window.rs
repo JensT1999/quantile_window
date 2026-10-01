@@ -559,13 +559,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 
         // Setting floor block
         let target_floor_block_index = self.actual_floor_block_index;
-        debug_assert!(target_floor_block_index < self.block_data.len());
-
-        // SAFETY: `actual_floor_block_index` is always a valid index into `block_data`.
-        // See struct `QuantileWindow` and invariant 10 in header.
-        let target_floor_block = unsafe {
-            self.block_data.get_unchecked_mut(target_floor_block_index)
-        };
+        let target_floor_block = &mut self.block_data[target_floor_block_index];
         target_floor_block.set_actual_floor_block(true);
     }
 
