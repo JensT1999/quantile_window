@@ -103,6 +103,9 @@ impl Display for SizingErrorType {
 /// # Returns
 /// A vector containing the calculated quantiles.
 /// Please note: The vector always will be of the size [(`input_array.len()` - `window_size`) + 1].
+/// Therefore this function will always return only quantiles for **fully completed windows**. This means
+/// this implementation does not calculate partial windows, i.e. for a window of size N, the first N - 1
+/// values produce **no** output.
 ///
 /// # Errors
 /// Returns a [`WindowError`] if:
@@ -199,6 +202,9 @@ pub fn rolling_quantile_window(
 /// # Returns
 /// A vector containing the calculated quantiles.
 /// Please note: The vector always will be of the size [(`input_array.len()` - `window_size`) + 1].
+/// Therefore this function will always return only quantiles for **fully completed windows**. This means
+/// this implementation does not calculate partial windows, i.e. for a window of size N, the first N - 1
+/// values produce **no** output.
 ///
 /// # Errors
 /// Returns a [`WindowError`] if:
