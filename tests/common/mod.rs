@@ -31,9 +31,13 @@ pub fn naive_quantile_gen(
             let floor_value = nan_handled_array[floor_rank];
             let ceil_rank = floor_rank + 1;
             let ceil_value = nan_handled_array[ceil_rank];
-            let interpolated_quantile = floor_value + (ceil_value - floor_value) *
-                (searched_rank - searched_rank.floor());
-            result_vec.push(interpolated_quantile);
+
+            let result_value = if floor_value == ceil_value {
+                floor_value
+            } else {
+                floor_value + (ceil_value - floor_value) * (searched_rank - searched_rank.floor())
+            };
+            result_vec.push(result_value);
         }
     }
 

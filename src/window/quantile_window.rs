@@ -1312,7 +1312,11 @@ mod quantilewindow_utils {
         floor_value: f64,
         successor_value: f64
     ) -> f64 {
-        floor_value + (successor_value - floor_value) * (searched_rank - searched_rank.floor())
+        if floor_value == successor_value {
+            floor_value
+        } else {
+            floor_value + (successor_value - floor_value) * (searched_rank - searched_rank.floor())
+        }
     }
 
     #[inline(always)]
@@ -2388,5 +2392,34 @@ mod tests {
 
         let expected_interpolation = !((expected_searched_rank % 1.0) == 0.0);
         assert!(test_window.interpolation == expected_interpolation);
+    }
+
+    const TESTED_INTERPOLATION_PAIRS: [((f64, f64), f64); 5] = [
+        ((4.0, 4.0), 4.0), ((f64::INFINITY, f64::INFINITY), f64::INFINITY),
+        ((f64::NEG_INFINITY, f64::NEG_INFINITY), f64::NEG_INFINITY),
+        ((f64::NEG_INFINITY, f64::INFINITY), f64::NAN),
+        ((5.0, 7.0), 5.5)
+    ];
+    const TESTED_ARTIFICIAL_SEARCHED_RANK: f64 = 2.25;
+
+    #[test]
+    fn test_quantile_interpolation_pairs() {
+        TESTED_INTERPOLATION_PAIRS
+            .iter()
+            .for_each(|((value_a, value_b), expected_result)| {
+                let interpolation_result = quantilewindow_utils::calculate_interpolated_quantile(
+                    TESTED_ARTIFICIAL_SEARCHED_RANK,
+                    *value_a,
+                    *value_b
+                );
+
+                if interpolation_result.is_nan() || expected_result.is_nan() {
+                    assert!(
+                        interpolation_result.is_nan() && expected_result.is_nan()
+                    );
+                } else {
+                    assert_eq!(interpolation_result, *expected_result);
+                }
+            });
     }
 }

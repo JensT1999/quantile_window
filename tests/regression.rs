@@ -93,3 +93,33 @@ fn test_minimal_duplicates() {
         );
     }
 }
+
+// The interpolation originally failed when floor value and successor value were f64::INFINITY both. This test
+// checks if f64::INFINITY and f64::INFINITY result in f64::INFINITY, as well as f64::NEG_INFINITY. The expected
+// result for the interpolation between f64::NEG_INFINITY and f64::INFINITY is f64::NAN.
+#[test]
+fn test_inf_input() {
+    let test_data = [
+        f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY
+    ];
+
+    let result = quantile_window::rolling_quantile_window(
+        &test_data,
+        2,
+        0.5
+    ).unwrap();
+
+    [f64::NAN, f64::NAN, f64::INFINITY, f64::NAN, f64::NEG_INFINITY]
+        .iter()
+        .zip(result.iter())
+        .for_each(|(value_a, value_b)| {
+            if value_a.is_nan() || value_b.is_nan() {
+                assert!(
+                    value_a.is_nan() && value_b.is_nan()
+                );
+            } else {
+                assert_eq!(value_a, value_b)
+            }
+        });
+
+}
