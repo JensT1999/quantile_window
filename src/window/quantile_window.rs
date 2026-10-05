@@ -274,6 +274,9 @@
 //! Invariants 2, 4, 8, 9, 10 and 11 are checked after every update in debug builds by
 //! [`QuantileWindow::debug_update_window_invariants`].
 
+pub mod block_size_dispatcher;
+mod utils;
+
 use std::{marker::PhantomData};
 
 use crate::window::utils::{
@@ -466,7 +469,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         window_size: usize,
         quantile: f64
     ) -> Self {
-        let needed_blocks = quantilewindow_utils::calculate_needed_blocks::<BLOCK_SIZE>(window_size);
+        let needed_blocks = utils::calculate_needed_blocks::<BLOCK_SIZE>(window_size);
         let needed_queue_size = window_size;
 
         Self {
@@ -512,7 +515,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         current_block.length += 1;
         self.element_count += 1;
 
-        if quantilewindow_utils::is_invalid_value(value) {
+        if utils::is_invalid_value(value) {
             self.invalid_count += 1;
         }
     }
@@ -766,8 +769,8 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         let actual_block_index = self.actual_block;
         let old_value = self.update_queue_get_old_value(new_value);
 
-        let old_value_invalid = quantilewindow_utils::is_invalid_value(old_value);
-        let new_value_invalid = quantilewindow_utils::is_invalid_value(new_value);
+        let old_value_invalid = utils::is_invalid_value(old_value);
+        let new_value_invalid = utils::is_invalid_value(new_value);
 
         if old_value_invalid && new_value_invalid {
             self.update_tracked_block();
@@ -840,13 +843,13 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         let block_slice = &mut actual_block.data[0..actual_block.length];
         let old_value_index = block_slice.iter().filter(|&&x| x < old_value).count();
         let new_value_index = if new_value > old_value {
-            quantilewindow_utils::shift_in_larger(
+            utils::shift_in_larger(
                 block_slice,
                 old_value_index,
                 new_value
             )
         } else if new_value < old_value {
-            quantilewindow_utils::shift_in_smaller(
+            utils::shift_in_smaller(
                 block_slice,
                 old_value_index,
                 new_value
@@ -913,7 +916,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         if update_result.window_no_valid_succ {
             if self.pred_tree.got_invalid_root() {
                 let actual_tracker_value = actual_block.data[0];
-                if !quantilewindow_utils::is_invalid_value(actual_tracker_value) {
+                if !utils::is_invalid_value(actual_tracker_value) {
                     self.actual_floor_value = actual_tracker_value;
                 }
             } else {
@@ -1115,7 +1118,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
             let successor_value = self.succ_tree.get_root().value;
             let successor_value = successor_value.to_f64();
 
-            quantilewindow_utils::calculate_interpolated_quantile(
+            utils::calculate_interpolated_quantile(
                 self.searched_rank,
                 floor_value,
                 successor_value
@@ -1293,120 +1296,6 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
     }
 }
 
-// Utils
-mod quantilewindow_utils {
-    use std::ptr;
-
-    use crate::window::{utils::ordered_double::OrderedDouble};
-
-    #[inline(always)]
-    pub fn calculate_needed_blocks<const BLOCK_SIZE: usize>(
-        window_size: usize
-    ) -> usize {
-        window_size.div_ceil(BLOCK_SIZE)
-    }
-
-    #[inline(always)]
-    pub fn calculate_interpolated_quantile(
-        searched_rank: f64,
-        floor_value: f64,
-        successor_value: f64
-    ) -> f64 {
-        if floor_value == successor_value {
-            floor_value
-        } else {
-            floor_value + (successor_value - floor_value) * (searched_rank - searched_rank.floor())
-        }
-    }
-
-    #[inline(always)]
-    pub fn shift_in_smaller(
-        data: &mut [OrderedDouble],
-        old_value_index: usize,
-        new_value: OrderedDouble
-    ) -> usize {
-        debug_assert!(!data.is_empty());
-        debug_assert!(old_value_index < data.len());
-        debug_assert!(new_value < data[old_value_index]);
-        debug_assert!(data.is_sorted());
-
-        let new_value_index = data.iter().filter(|&&x| x <= new_value).count();
-        debug_assert!(new_value_index <= old_value_index);
-
-        // SAFETY: `new_value` is smaller than the value at `old_value_index` and the
-        // block is sorted, so every element counted into `new_value_index` lies on the
-        // left side of `old_value_index`. The copy therefore moves everything from
-        // `new_value_index` one position to the right and the last written position is
-        // `old_value_index`, which is in range.
-        unsafe {
-            let start_ptr = data.as_mut_ptr().add(new_value_index);
-            ptr::copy(start_ptr,
-                start_ptr.add(1),
-                old_value_index - new_value_index);
-            *data.get_unchecked_mut(new_value_index) = new_value;
-        }
-
-        new_value_index
-    }
-
-    #[inline(always)]
-    pub fn shift_in_larger(
-        data: &mut [OrderedDouble],
-        old_value_index: usize,
-        new_value: OrderedDouble
-    ) -> usize {
-        debug_assert!(!data.is_empty());
-        debug_assert!(old_value_index < data.len());
-        debug_assert!(new_value > data[old_value_index]);
-        debug_assert!(data.is_sorted());
-
-        // This ensures that atleast the value at `old_value_index` lies left from
-        // the `new_value` - so the calculation of `new_value_index` wont underflow.
-        // Therefore it is neccessary that the `data` array is sorted, which is
-        // asserted above.
-        debug_assert!(data.iter().filter(|&&x| x < new_value).count() >= 1);
-
-        // The `-1` is necessary, because `.count()` will return the positon of the
-        // first element >= `new_value`. Moving that value would destroy the
-        // sorting.
-        let new_value_index = data.iter().filter(|&&x| x < new_value).count() - 1;
-        debug_assert!(new_value_index >= old_value_index);
-        debug_assert!(new_value_index < data.len());
-
-        // SAFETY: `new_value` is larger than the value at `old_value_index`, so at
-        // least that element is counted and the `- 1` cannot underflow. For the same
-        // reason `new_value_index >= old_value_index`. The copy moves everything from
-        // `new_value_index` one positon to the left, so the value at `old_value_index`
-        // gets overridden.
-        unsafe {
-            let start_ptr = data.as_mut_ptr().add(old_value_index);
-            ptr::copy(start_ptr.add(1),
-                start_ptr,
-                new_value_index - old_value_index);
-            *data.get_unchecked_mut(new_value_index) = new_value;
-        }
-
-        new_value_index
-    }
-
-    #[inline(always)]
-    pub fn map_to_corresponding_value(
-        value: f64
-    ) -> OrderedDouble {
-        if value.is_nan() {
-            OrderedDouble::MAX
-        } else {
-            OrderedDouble::from_f64(value)
-        }
-    }
-
-    #[inline(always)]
-    pub fn is_invalid_value(
-        tested_value: OrderedDouble
-    ) -> bool {
-        tested_value == OrderedDouble::MAX
-    }
-}
 // Tree
 
 mod quantilewindow_tree_utils {
@@ -1764,138 +1653,6 @@ where
     }
 }
 
-pub mod block_size_dispatcher {
-    //! Selects the `BLOCK_SIZE` used by [`crate::rolling_quantile_window`], depending on the
-    //! requested window size.
-    //!
-    //! The block sizes below were determined by benchmarking; 16, 32 and 64
-    //! performed best. The benchmarks can be found in `benches/rolling.rs` and run
-    //! on your own machine with `cargo bench --bench rolling -- block_sizes_bench`.
-    //! Results vary between machines - the sizes chosen here were all measured on a
-    //! MacBook Air M3.
-    //!
-    //! The important point is that neither larger or smaller blocks are better in
-    //! general. The reasons are:
-    //!
-    //! 1. The linear searches and the shift performed inside a block, to locate the
-    //!    outgoing value and move the incoming one to its sorted position. Larger
-    //!    blocks mean more operations here.
-    //! 2. The depth of the tournament trees - the deeper they are, the more
-    //!    operations each lookup takes.
-    //! 3. Growing cache unfriendliness caused by a rising number of blocks, and with
-    //!    it a rising number of leaves in the tournament trees. Smaller blocks mean
-    //!    more blocks, and therefore more leaves, for the same window size.
-    //!
-    //! As described in the module header, the number of leaves is
-    //! rounded up to the next power of `K_ARY` so that the tournament
-    //! trees stay perfectly balanced. The calculation starts from the
-    //! number of blocks, which follows from the window size and the
-    //! given `BLOCK_SIZE`. Because of the rounding, the leaf count of a
-    //! tree always stays within a fixed range. In general the range between
-    //! two consecutive powers of `K_ARY`. Crossing such a range therefore
-    //! adds an entire new level at once. In terms of the window size
-    //! this gives:
-    //!
-    //! ```text
-    //!     window_size = K_ARY^k * B
-    //!
-    //!     K_ARY  the number of children per node
-    //!     k      the exponent, i.e. the number of levels
-    //!     B      the chosen BLOCK_SIZE
-    //! ```
-    //!
-    //! Since the three block sizes divide the same window differently -
-    //! `B16` produces twice as many blocks as `B32` - they cross into a
-    //! new range at different window sizes.
-    //!
-    //! The benchmarks show that point 2, the depth of the tournament
-    //! trees, is the decisive variable for performance. At equal depth,
-    //! however, point 1 alone determines which block size performs best,
-    //! which favours the smaller one. That effect does not hold without
-    //! limit: smaller blocks also mean more blocks, and correspondingly
-    //! more leaves in the tournament trees. Point 3 therefore gains
-    //! weight as the trees grow, until it outweighs the advantage of the
-    //! shorter distances inside a block. The point where this tips over
-    //! is described by the two constants [`BORDER_FOR_B16`] and
-    //! [`BORDER_FOR_B32`]. Each marks the point at which the
-    //! corresponding block size starts to lose against the next larger
-    //! one, even at equal depth. 64 turned out to be the largest useful
-    //! block size. [`get_suitable_std_block_size`] implements what is
-    //! described here.
-
-    use crate::window::quantile_window::{
-        K_ARY,
-        quantilewindow_tree_utils::tree_calculate_metadata,
-        quantilewindow_utils::calculate_needed_blocks
-    };
-
-    const BORDER_FOR_B16: usize = K_ARY.pow(5);
-    const BORDER_FOR_B32: usize = K_ARY.pow(6);
-
-    pub fn get_suitable_std_block_size(
-        window_size: usize
-    ) -> StdBlockSizes {
-        let b16_metadata = StdBlockSizes::B16.calculate_metadata(window_size);
-        let b32_metadata = StdBlockSizes::B32.calculate_metadata(window_size);
-        let b64_metadata = StdBlockSizes::B64.calculate_metadata(window_size);
-
-        if b16_metadata.needed_blocks > BORDER_FOR_B16 {
-            if b32_metadata.needed_blocks > BORDER_FOR_B32 ||
-                b64_metadata.needed_tree_buffer_length < b32_metadata.needed_tree_buffer_length {
-                return StdBlockSizes::B64;
-            }
-
-            return StdBlockSizes::B32;
-        }
-
-        if b16_metadata.needed_tree_buffer_length <= b32_metadata.needed_tree_buffer_length {
-            StdBlockSizes::B16
-        } else {
-            StdBlockSizes::B32
-        }
-    }
-
-    struct BlockSizeMetaData {
-        needed_blocks: usize,
-        needed_tree_buffer_length: usize
-    }
-
-    impl BlockSizeMetaData {
-
-        fn generate<const BLOCK_SIZE: usize>(
-            window_size: usize
-        ) -> Self {
-            let needed_blocks = calculate_needed_blocks::<BLOCK_SIZE>(window_size);
-            let needed_tree_buffer_length = tree_calculate_metadata(needed_blocks).1;
-
-            Self {
-                needed_blocks,
-                needed_tree_buffer_length
-            }
-        }
-    }
-
-    pub enum StdBlockSizes {
-        B16,
-        B32,
-        B64
-    }
-
-    impl StdBlockSizes {
-
-        fn calculate_metadata(
-            &self,
-            window_size: usize
-        ) -> BlockSizeMetaData {
-            match self {
-                StdBlockSizes::B16 => BlockSizeMetaData::generate::<16>(window_size),
-                StdBlockSizes::B32 => BlockSizeMetaData::generate::<32>(window_size),
-                StdBlockSizes::B64 => BlockSizeMetaData::generate::<64>(window_size)
-            }
-        }
-    }
-}
-
 // Main function
 pub fn rolling_window<const BLOCK_SIZE: usize>(
     input_array: &[f64],
@@ -1917,7 +1674,7 @@ pub fn rolling_window<const BLOCK_SIZE: usize>(
         .iter()
         .fold(QuantileWindow::<BLOCK_SIZE>::new(window_size, quantile),
             |mut window, value| {
-                let input_value = quantilewindow_utils::map_to_corresponding_value(*value);
+                let input_value = utils::map_to_corresponding_value(*value);
                 window.add(input_value);
                 window
             });
@@ -1929,7 +1686,7 @@ pub fn rolling_window<const BLOCK_SIZE: usize>(
     input_slice
         .iter()
         .for_each(|value| {
-            let input_value = quantilewindow_utils::map_to_corresponding_value(*value);
+            let input_value = utils::map_to_corresponding_value(*value);
             window.update_window(input_value);
 
             let result = window.adjust_and_result_quantile();
@@ -1944,218 +1701,19 @@ mod tests {
     use rand::{RngExt, SeedableRng, rngs::StdRng};
     use super::*;
 
-    // Testing forwards and backwards shift in
-    #[test]
-    fn test_forwards_shift_in_landing_front() {
-        let input_data = [5.0, 6.0, 7.0, 8.0];
-        let mut test_input = turn_into_ordered_double_vec(&input_data);
-
-        let input_value = 5.5;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        let insert_index = {
-            quantilewindow_utils::shift_in_larger(
-                &mut test_input,
-                0,
-                test_value
-            )
-        };
-
-        let result_data = [5.5, 6.0, 7.0, 8.0];
-        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
-
-        assert_eq!(insert_index, 0);
-        assert_eq!(&test_input, &ordered_result_data);
-    }
-
-    #[test]
-    fn test_backwards_shift_in_landing_front() {
-        let input_data = [1.0, 2.0, 3.0, 9.0];
-        let mut test_input = turn_into_ordered_double_vec(&input_data);
-
-        let input_value = 0.5;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        let insert_index = {
-            quantilewindow_utils::shift_in_smaller(
-                &mut test_input,
-                3,
-                test_value
-            )
-        };
-
-        let result_data = [0.5, 1.0, 2.0, 3.0];
-        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
-
-        assert_eq!(insert_index, 0);
-        assert_eq!(&test_input, &ordered_result_data);
-    }
-
-    #[test]
-    fn test_forwards_shift_in_landing_end() {
-        let input_data = [1.0, 2.0, 3.0, 4.0];
-        let mut test_input = turn_into_ordered_double_vec(&input_data);
-
-        let input_value = 9.0;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        let insert_index = {
-            quantilewindow_utils::shift_in_larger(
-                &mut test_input,
-                0,
-                test_value
-            )
-        };
-
-        let result_data = [2.0, 3.0, 4.0, 9.0];
-        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
-
-        assert_eq!(insert_index, 3);
-        assert_eq!(&test_input, &ordered_result_data);
-    }
-
-    #[test]
-    fn test_backwards_shift_in_landing_end() {
-        let input_data = [1.0, 9.0, 9.0, 9.0];
-        let mut test_input = turn_into_ordered_double_vec(&input_data);
-
-        let input_value = 8.0;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        let insert_index = {
-            quantilewindow_utils::shift_in_smaller(
-                &mut test_input,
-                1,
-                test_value
-            )
-        };
-
-        let result_data = [1.0, 8.0, 9.0, 9.0];
-        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
-
-        assert_eq!(insert_index, 1);
-        assert_eq!(&test_input, &ordered_result_data);
-    }
-
-    #[test]
-    fn test_forwards_shift_in_landing_middle() {
-        let input_data = [1.0, 2.0, 5.0, 6.0];
-        let mut test_input = turn_into_ordered_double_vec(&input_data);
-
-        let input_value = 3.0;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        let insert_index = {
-            quantilewindow_utils::shift_in_larger(
-                &mut test_input,
-                0,
-                test_value
-            )
-        };
-
-        let result_data = [2.0, 3.0, 5.0, 6.0];
-        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
-
-        assert_eq!(insert_index, 1);
-        assert_eq!(&test_input, &ordered_result_data);
-    }
-
-    #[test]
-    fn test_backwards_shift_in_landing_middle() {
-        let input_data = [1.0, 4.0, 5.0, 9.0];
-        let mut test_input = turn_into_ordered_double_vec(&input_data);
-
-        let input_value = 2.0;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        let insert_index = {
-            quantilewindow_utils::shift_in_smaller(
-                &mut test_input,
-                3,
-                test_value
-            )
-        };
-
-        let result_data = [1.0, 2.0, 4.0, 5.0];
-        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
-
-        assert_eq!(insert_index, 1);
-        assert_eq!(&test_input, &ordered_result_data);
-    }
-
-    #[test]
-    fn test_forwards_shift_in_duplicates() {
-        let input_data = [1.0, 3.0, 3.0, 3.0, 9.0];
-        let mut test_input = turn_into_ordered_double_vec(&input_data);
-
-        let input_value = 3.0;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        let insert_index = {
-            quantilewindow_utils::shift_in_larger(
-                &mut test_input,
-                0,
-                test_value
-            )
-        };
-
-        let result_data = [3.0, 3.0, 3.0, 3.0, 9.0];
-        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
-
-        assert_eq!(insert_index, 0);
-        assert_eq!(&test_input, &ordered_result_data);
-    }
-
-    #[test]
-    fn test_backwards_shift_in_duplicates() {
-        let input_data = [1.0, 3.0, 3.0, 3.0, 9.0];
-        let mut test_input = turn_into_ordered_double_vec(&input_data);
-
-        let input_value = 3.0;
-        let test_value = OrderedDouble::from_f64(input_value);
-
-        let insert_index = {
-            quantilewindow_utils::shift_in_smaller(
-                &mut test_input,
-                4,
-                test_value
-            )
-        };
-
-        let result_data = [1.0, 3.0, 3.0, 3.0, 3.0];
-        let ordered_result_data = turn_into_ordered_double_vec(&result_data);
-
-        assert_eq!(insert_index, 4);
-        assert_eq!(&test_input, &ordered_result_data);
-    }
-
-    fn turn_into_ordered_double_vec(input_array: &[f64]) -> Vec<OrderedDouble> {
-        input_array
-            .iter()
-            .map(|x| OrderedDouble::from_f64(*x))
-            .collect::<Vec<OrderedDouble>>()
-    }
-
     const BLOCK_SIZE: usize = 64;
     const RAND_TESTING_SEED: u64 = 109;
     const QUANTILEWINDOW_TEST_SIZE: usize = 1000;
     const QUANTILEWINDOW_TEST_QUANTILE: f64 = 0.01;
 
     #[test]
-    fn test_calculate_needed_blocks() {
-        let expected_needed_blocks = QUANTILEWINDOW_TEST_SIZE.div_ceil(BLOCK_SIZE);
-        let needed_blocks = quantilewindow_utils::
-            calculate_needed_blocks::<BLOCK_SIZE>(QUANTILEWINDOW_TEST_SIZE);
-
-        assert_eq!(expected_needed_blocks, needed_blocks);
-    }
-
-    #[test]
     fn test_needed_trees_metadata_calc() {
-        let needed_blocks = quantilewindow_utils::
-            calculate_needed_blocks::<BLOCK_SIZE>(QUANTILEWINDOW_TEST_SIZE);
-        let needed_trees_metadata = quantilewindow_tree_utils::
-            tree_calculate_metadata(needed_blocks);
+        let needed_blocks = utils::calculate_needed_blocks::<BLOCK_SIZE>(
+            QUANTILEWINDOW_TEST_SIZE
+        );
+        let needed_trees_metadata = quantilewindow_tree_utils::tree_calculate_metadata(
+            needed_blocks
+        );
 
         let (expected_leafs_starting_index, expected_tree_length) = needed_trees_metadata;
         assert!(expected_leafs_starting_index < expected_tree_length);
@@ -2169,9 +1727,7 @@ mod tests {
 
     #[test]
     fn test_trees_new() {
-        let needed_blocks = quantilewindow_utils::
-            calculate_needed_blocks::<BLOCK_SIZE>(QUANTILEWINDOW_TEST_SIZE);
-
+        let needed_blocks = utils::calculate_needed_blocks::<BLOCK_SIZE>(QUANTILEWINDOW_TEST_SIZE);
         let tested_tree = QuantileWindowTree::
             <QuantileWindowSuccessorTree>::new(needed_blocks);
 
@@ -2194,11 +1750,13 @@ mod tests {
     #[test]
     fn test_quantilewindow_new() {
         let expected_actual_floor_value = OrderedDouble::from_f64(0.0);
-        let expected_window_blocks = quantilewindow_utils::
-            calculate_needed_blocks::<BLOCK_SIZE>(QUANTILEWINDOW_TEST_SIZE);
+        let expected_window_blocks = utils::calculate_needed_blocks::<BLOCK_SIZE>(
+            QUANTILEWINDOW_TEST_SIZE
+        );
         let expected_queue_length = QUANTILEWINDOW_TEST_SIZE;
-        let expected_tree_metadata = quantilewindow_tree_utils::
-            tree_calculate_metadata(expected_window_blocks);
+        let expected_tree_metadata = quantilewindow_tree_utils::tree_calculate_metadata(
+            expected_window_blocks
+        );
         let (expected_leafs_starting_index, expected_tree_length) = expected_tree_metadata;
 
         let test_window = QuantileWindow::<BLOCK_SIZE>:: new(
@@ -2392,34 +1950,5 @@ mod tests {
 
         let expected_interpolation = !((expected_searched_rank % 1.0) == 0.0);
         assert!(test_window.interpolation == expected_interpolation);
-    }
-
-    const TESTED_INTERPOLATION_PAIRS: [((f64, f64), f64); 5] = [
-        ((4.0, 4.0), 4.0), ((f64::INFINITY, f64::INFINITY), f64::INFINITY),
-        ((f64::NEG_INFINITY, f64::NEG_INFINITY), f64::NEG_INFINITY),
-        ((f64::NEG_INFINITY, f64::INFINITY), f64::NAN),
-        ((5.0, 7.0), 5.5)
-    ];
-    const TESTED_ARTIFICIAL_SEARCHED_RANK: f64 = 2.25;
-
-    #[test]
-    fn test_quantile_interpolation_pairs() {
-        TESTED_INTERPOLATION_PAIRS
-            .iter()
-            .for_each(|((value_a, value_b), expected_result)| {
-                let interpolation_result = quantilewindow_utils::calculate_interpolated_quantile(
-                    TESTED_ARTIFICIAL_SEARCHED_RANK,
-                    *value_a,
-                    *value_b
-                );
-
-                if interpolation_result.is_nan() || expected_result.is_nan() {
-                    assert!(
-                        interpolation_result.is_nan() && expected_result.is_nan()
-                    );
-                } else {
-                    assert_eq!(interpolation_result, *expected_result);
-                }
-            });
     }
 }
