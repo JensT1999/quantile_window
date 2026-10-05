@@ -1,6 +1,7 @@
- use std::ptr;
-
-use crate::window::{utils::ordered_double::OrderedDouble};
+use std::ptr;
+use crate::window::{
+    utils::ordered_double::OrderedDouble
+};
 
 #[inline(always)]
 pub fn calculate_needed_blocks<const BLOCK_SIZE: usize>(

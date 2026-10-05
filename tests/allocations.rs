@@ -1,9 +1,5 @@
 mod common;
 
-use common::{
-    gen_continous
-};
-
 use rand::{SeedableRng, rngs::StdRng};
 use std::{alloc::{GlobalAlloc, System}, sync::atomic::AtomicUsize};
 
@@ -95,13 +91,13 @@ fn count_allocations(
 #[test]
 fn test_allocation_count_while_computation() {
     let mut rng = StdRng::seed_from_u64(RANDOM_DATA_SEED);
-    let short_input_data = gen_continous(
+    let short_input_data = common::gen_continous(
         SHORT_INPUT_LENGTH,
         &mut rng,
         LOWEST_POSSIBLE_VALUE,
         HIGHEST_POSSIBLE_VALUE
     );
-    let long_input_data = gen_continous(
+    let long_input_data = common::gen_continous(
         LONG_INPUT_LENGTH,
         &mut rng,
         LOWEST_POSSIBLE_VALUE,

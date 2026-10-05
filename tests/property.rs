@@ -1,14 +1,5 @@
 mod common;
 
-use common::{
-    gen_continous,
-    quantize_data,
-    nan_fill_data,
-    sparse_data,
-    gen_monotonous,
-    count_unique_values,
-    process_and_assert_results
-};
 use rand::{SeedableRng, rngs::StdRng};
 
 const TESTED_WINDOW_SIZES: [usize; 16] = [
@@ -44,7 +35,7 @@ fn test_continous_data() {
 
     for window_size in TESTED_WINDOW_SIZES {
         for quantile in TESTED_QUANTILES {
-            process_and_assert_results(&test_data, "continous data", window_size, quantile);
+            common::process_and_assert_results(&test_data, "continous data", window_size, quantile);
         }
     }
 }
@@ -57,9 +48,9 @@ fn test_quantized_data() {
     let span = HIGHEST_POSSIBLE_VALUE - LOWEST_POSSIBLE_VALUE;
     for unique_values in NUM_UNIQUE_VALUES_IN_WINDOW {
         let step = span / unique_values as f64;
-        let quantized_data = quantize_data(&test_data, step);
+        let quantized_data = common::quantize_data(&test_data, step);
 
-        let unique_values_count = count_unique_values(&quantized_data);
+        let unique_values_count = common::count_unique_values(&quantized_data);
         assert!(
             (unique_values / 2) <= unique_values_count &&
             (unique_values + 2) >= unique_values_count
@@ -68,7 +59,7 @@ fn test_quantized_data() {
         let test_label = format!("quantized data - step: {}", step);
         for window_size in TESTED_WINDOW_SIZES {
             for quantile in TESTED_QUANTILES {
-                process_and_assert_results(&quantized_data, &test_label, window_size, quantile);
+                common::process_and_assert_results(&quantized_data, &test_label, window_size, quantile);
             }
         }
     }
@@ -79,10 +70,10 @@ fn test_full_nan_data() {
     let mut rng = StdRng::seed_from_u64(TESTED_DATA_SEED);
     let test_data = gen_test_data(&mut rng);
 
-    let nan_test_data = nan_fill_data(&test_data, &mut rng, 1.0);
+    let nan_test_data = common::nan_fill_data(&test_data, &mut rng, 1.0);
     for window_size in TESTED_WINDOW_SIZES {
         for quantile in TESTED_QUANTILES {
-            process_and_assert_results(&nan_test_data, "full of nan data", window_size, quantile);
+            common::process_and_assert_results(&nan_test_data, "full of nan data", window_size, quantile);
         }
     }
 }
@@ -93,12 +84,12 @@ fn test_partial_nan_data() {
     let test_data = gen_test_data(&mut rng);
 
     for nan_ratio in RATIO_OF_NAN_IN_WINDOW {
-        let nan_test_data = nan_fill_data(&test_data, &mut rng, nan_ratio);
+        let nan_test_data = common::nan_fill_data(&test_data, &mut rng, nan_ratio);
         let test_label = format!("nan data - ratio: {}", nan_ratio);
 
         for window_size in TESTED_WINDOW_SIZES {
             for quantile in TESTED_QUANTILES {
-                process_and_assert_results(&nan_test_data, &test_label, window_size, quantile);
+                common::process_and_assert_results(&nan_test_data, &test_label, window_size, quantile);
             }
         }
     }
@@ -112,16 +103,16 @@ fn test_nan_and_quantized_data() {
     let span = HIGHEST_POSSIBLE_VALUE - LOWEST_POSSIBLE_VALUE;
     for unique_values in NUM_UNIQUE_VALUES_IN_WINDOW {
         let step = span / unique_values as f64;
-        let quantized_data = quantize_data(&test_data, step);
+        let quantized_data = common::quantize_data(&test_data, step);
 
-        let unique_values_count = count_unique_values(&quantized_data);
+        let unique_values_count = common::count_unique_values(&quantized_data);
         assert!(
             (unique_values / 2) <= unique_values_count &&
             (unique_values + 2) >= unique_values_count
         );
 
         for nan_ratio in RATIO_OF_NAN_IN_WINDOW {
-            let nan_test_data = nan_fill_data(&quantized_data, &mut rng, nan_ratio);
+            let nan_test_data = common::nan_fill_data(&quantized_data, &mut rng, nan_ratio);
             let test_label = format!(
                 "quantized data - step: {} - nan data - ratio: {}",
                 step,
@@ -130,7 +121,7 @@ fn test_nan_and_quantized_data() {
 
             for window_size in TESTED_WINDOW_SIZES {
                 for quantile in TESTED_QUANTILES {
-                    process_and_assert_results(&nan_test_data, &test_label, window_size, quantile);
+                    common::process_and_assert_results(&nan_test_data, &test_label, window_size, quantile);
                 }
             }
         }
@@ -143,11 +134,11 @@ fn test_sparse_data() {
     let test_data = gen_test_data(&mut rng);
 
     for window_size in TESTED_WINDOW_SIZES {
-        let sparse_test_data = sparse_data(&test_data, window_size);
+        let sparse_test_data = common::sparse_data(&test_data, window_size);
         let test_label = format!("sparse data - spacing {}", window_size);
 
         for quantile in TESTED_QUANTILES {
-            process_and_assert_results(&sparse_test_data, &test_label, window_size, quantile);
+            common::process_and_assert_results(&sparse_test_data, &test_label, window_size, quantile);
         }
     }
 }
@@ -158,7 +149,7 @@ fn test_gradient_data() {
 
     for gradient in GRADIENTS_TO_TEST {
         for window_size in TESTED_WINDOW_SIZES {
-            let test_data = gen_monotonous(
+            let test_data = common::gen_monotonous(
                 TESTED_INPUT_LENGTH,
                 &mut rng,
                 gradient,
@@ -169,7 +160,7 @@ fn test_gradient_data() {
 
             let test_label = format!("gradient data - gradient: {}", gradient);
             for quantile in TESTED_QUANTILES {
-                process_and_assert_results(&test_data, &test_label, window_size, quantile);
+                common::process_and_assert_results(&test_data, &test_label, window_size, quantile);
             }
         }
     }
@@ -178,7 +169,7 @@ fn test_gradient_data() {
 fn gen_test_data(
     rng: &mut StdRng
 ) -> Vec<f64> {
-    gen_continous(
+    common::gen_continous(
         TESTED_INPUT_LENGTH,
         rng,
         LOWEST_POSSIBLE_VALUE,

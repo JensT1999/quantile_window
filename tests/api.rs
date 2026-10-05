@@ -1,9 +1,5 @@
 mod common;
 
-use common::{
-    process_and_assert_results
-};
-
 const TESTED_QUANTILES: [f64; 3] = [
     0.0, 0.5, 1.0
 ];
@@ -16,7 +12,7 @@ const VALID_TEST_INPUT: [f64; 10] = [
 fn test_window_size_equals_input_length() {
     for quantile in TESTED_QUANTILES {
         let test_label = format!("window size equals input length - quantile: {}", quantile);
-        process_and_assert_results(
+        common::process_and_assert_results(
             &VALID_TEST_INPUT,
             &test_label,
             VALID_TEST_INPUT.len(),
@@ -30,7 +26,7 @@ fn test_window_full_of_nan_at_beginning() {
     let nan_input = [f64::NAN; 10];
     let test_input = [nan_input, VALID_TEST_INPUT].concat();
 
-    process_and_assert_results(
+    common::process_and_assert_results(
         &test_input,
         "window full of nans at beginning",
         10,

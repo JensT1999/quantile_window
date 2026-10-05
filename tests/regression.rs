@@ -1,11 +1,5 @@
 mod common;
 
-use common::{
-    gen_continous,
-    sparse_data,
-    process_and_assert_results
-};
-
 use rand::{SeedableRng, rngs::StdRng};
 
 const TESTED_DATA_SEED: u64 = 42;
@@ -53,7 +47,7 @@ fn test_no_valid_successor() {
 #[test]
 fn test_no_valid_successor_or_predeccessor() {
     let mut rng = StdRng::seed_from_u64(TESTED_DATA_SEED);
-    let test_data = gen_continous(
+    let test_data = common::gen_continous(
         TESTED_INPUT_SIZE,
         &mut rng,
         LOWEST_POSSIBLE_VALUE,
@@ -61,10 +55,10 @@ fn test_no_valid_successor_or_predeccessor() {
     );
 
     for offset in 0usize..=1 {
-        let sparse_test_data: Vec<f64> = sparse_data(&test_data, TESTED_WINDOW_SIZE + offset);
+        let sparse_test_data: Vec<f64> = common::sparse_data(&test_data, TESTED_WINDOW_SIZE + offset);
         let test_label = format!("no succ or pred test - offset: {}", offset);
         for quantile in TESTED_QUANTILES {
-            process_and_assert_results(
+            common::process_and_assert_results(
                 &sparse_test_data,
                 &test_label,
                 TESTED_WINDOW_SIZE,
@@ -85,7 +79,7 @@ fn test_minimal_duplicates() {
     ];
 
     for quantile in TESTED_QUANTILES {
-        process_and_assert_results(
+        common::process_and_assert_results(
             &test_data,
             "minimal duplicate data",
             18,

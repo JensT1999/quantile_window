@@ -1,12 +1,11 @@
-use std::fmt::Display;
+mod quantile_window;
+mod utils;
 
-use crate::window::quantile_window::block_size_dispatcher::{
+use std::fmt::Display;
+use quantile_window::block_size_dispatcher::{
     StdBlockSizes,
     get_suitable_std_block_size
 };
-
-mod quantile_window;
-mod utils;
 
 const QUANTILE_EPSILON: f64 = 1e-9;
 
@@ -274,9 +273,7 @@ fn valid_quantile(quantile: f64) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::window::{
-        SizingErrorType, WindowError, rolling_quantile_window_generic, valid_quantile
-    };
+    use super::*;
 
     const TESTED_QUANTILES: [(f64, bool); 12] = [
         (0.01, true), (0.5, true), (0.001, false), (1.0, true), (1.01, false),

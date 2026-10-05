@@ -103,7 +103,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::window::utils::sorting_networks::sorting_network_16;
+    use super::*;
 
     #[test]
     fn test_sorting_network_16() {

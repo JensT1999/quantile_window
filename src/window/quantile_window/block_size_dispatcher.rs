@@ -56,7 +56,7 @@
 //! block size. [`get_suitable_std_block_size`] implements what is
 //! described here.
 
-use crate::window::quantile_window::{
+use super::{
     K_ARY,
     quantilewindow_tree_utils::tree_calculate_metadata,
     utils::calculate_needed_blocks

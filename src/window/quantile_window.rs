@@ -278,8 +278,7 @@ pub mod block_size_dispatcher;
 mod utils;
 
 use std::{marker::PhantomData};
-
-use crate::window::utils::{
+use super::utils::{
     ordered_double::OrderedDouble,
     sorting_networks,
 };

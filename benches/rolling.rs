@@ -1,6 +1,5 @@
 use std::{env, error::Error, fmt::Display, ops::{Range}, time::{Duration, Instant}};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use quantile_window::WindowError;
 
 // Different benchmarks
 const STD_BENCHMARK_KEY: &str = "std_bench";
@@ -373,7 +372,7 @@ impl BenchmarkDispatchers {
         &self,
         harness_config: &BenchmarkHarnessConfiguration,
         case_config: &BenchmarkCaseConfiguration
-    ) -> Result<BenchmarkResult, WindowError> {
+    ) -> Result<BenchmarkResult, quantile_window::WindowError> {
         match self {
             BenchmarkDispatchers::Std => run_benchmark::<BenchmarkStdDispatcher>(
                 harness_config,
@@ -421,7 +420,7 @@ trait BenchmarkedFunction {
         test_data: &[f64],
         window_size: usize,
         quantile: f64
-    ) -> Result<Vec<f64>, WindowError>;
+    ) -> Result<Vec<f64>, quantile_window::WindowError>;
 
     fn get_tag() -> String;
 }
@@ -433,7 +432,7 @@ impl BenchmarkedFunction for BenchmarkStdDispatcher {
         test_data: &[f64],
         window_size: usize,
         quantile: f64
-    ) -> Result<Vec<f64>, WindowError> {
+    ) -> Result<Vec<f64>, quantile_window::WindowError> {
         quantile_window::rolling_quantile_window(
             test_data,
             window_size,
@@ -453,7 +452,7 @@ impl BenchmarkedFunction for Benchmark16BlockSize {
         test_data: &[f64],
         window_size: usize,
         quantile: f64
-    ) -> Result<Vec<f64>, WindowError> {
+    ) -> Result<Vec<f64>, quantile_window::WindowError> {
         quantile_window::rolling_quantile_window_generic::<16>(
             test_data,
             window_size,
@@ -473,7 +472,7 @@ impl BenchmarkedFunction for Benchmark32BlockSize {
         test_data: &[f64],
         window_size: usize,
         quantile: f64
-    ) -> Result<Vec<f64>, WindowError> {
+    ) -> Result<Vec<f64>, quantile_window::WindowError> {
         quantile_window::rolling_quantile_window_generic::<32>(
             test_data,
             window_size,
@@ -493,7 +492,7 @@ impl BenchmarkedFunction for Benchmark64BlockSize {
         test_data: &[f64],
         window_size: usize,
         quantile: f64
-    ) -> Result<Vec<f64>, WindowError> {
+    ) -> Result<Vec<f64>, quantile_window::WindowError> {
         quantile_window::rolling_quantile_window_generic::<64>(
             test_data,
             window_size,
@@ -513,7 +512,7 @@ impl BenchmarkedFunction for Benchmark128BlockSize {
         test_data: &[f64],
         window_size: usize,
         quantile: f64
-    ) -> Result<Vec<f64>, WindowError> {
+    ) -> Result<Vec<f64>, quantile_window::WindowError> {
         quantile_window::rolling_quantile_window_generic::<128>(
             test_data,
             window_size,
@@ -529,7 +528,7 @@ impl BenchmarkedFunction for Benchmark128BlockSize {
 fn run_benchmark<B>(
     harness_config: &BenchmarkHarnessConfiguration,
     case_config: &BenchmarkCaseConfiguration
-) -> Result<BenchmarkResult, WindowError> where
+) -> Result<BenchmarkResult, quantile_window::WindowError> where
     B: BenchmarkedFunction {
     let mut benchmark_results = run_benchmark_iterations::<B>(
         harness_config.iterations,
@@ -552,7 +551,7 @@ fn run_benchmark_iterations<B>(
     test_data: &[f64],
     window_size: usize,
     quantile: f64
-) -> Result<Vec<Duration>, WindowError> where
+) -> Result<Vec<Duration>, quantile_window::WindowError> where
     B: BenchmarkedFunction {
     let mut result_vec = vec![];
     for _index in 0..iterations {
@@ -659,7 +658,7 @@ fn main() -> Result<(), Box<dyn Error>>{
 
 fn std_benchmarks(
     rng: &mut StdRng
-) -> Result<(), WindowError> {
+) -> Result<(), quantile_window::WindowError> {
     // Input length benchmark
     start_length_benchmark(rng)?;
     println!();
@@ -677,7 +676,7 @@ fn std_benchmarks(
 
 fn start_length_benchmark(
     rng: &mut StdRng
-) -> Result<(), WindowError> {
+) -> Result<(), quantile_window::WindowError> {
     let harness_config = BenchmarkHarnessConfiguration {
         iterations: STD_BENCH_ITERATIONS,
         first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT
@@ -750,7 +749,7 @@ fn build_length_benchmark_table(
 
 fn start_window_size_dist_benchmark(
     rng: &mut StdRng
-) -> Result<(), WindowError> {
+) -> Result<(), quantile_window::WindowError> {
     let harness_config = BenchmarkHarnessConfiguration {
         iterations: STD_BENCH_ITERATIONS,
         first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT
@@ -842,7 +841,7 @@ fn build_window_size_dist_benchmark_table(
 
 fn start_quantile_benchmark(
     rng: &mut StdRng
-) -> Result<(), WindowError> {
+) -> Result<(), quantile_window::WindowError> {
     let harness_config = BenchmarkHarnessConfiguration {
         iterations: STD_BENCH_ITERATIONS,
         first_valid_result: STD_INDEX_OF_FIRST_VALID_RESULT
@@ -916,7 +915,7 @@ fn build_quantile_benchmark_table(
 /// Special benchmark to determine the thresholds for function [`quantile_window::rolling_quantile_window`]
 fn start_block_sizes_benchmark(
     rng: &mut StdRng
-) -> Result<(), WindowError> {
+) -> Result<(), quantile_window::WindowError> {
     assert!(
         BLOCK_SIZES_BENCH_BENCHED_WINDOW_SIZES_RANGES.len() == BLOCK_SIZES_BENCH_BENCHED_CORRESP_LENGTHS.len(),
         "It appears that arrays of different lengths were entered."
