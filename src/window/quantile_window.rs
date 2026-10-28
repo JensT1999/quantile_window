@@ -275,6 +275,7 @@
 //! [`QuantileWindow::debug_update_window_invariants`].
 
 pub mod block_size_dispatcher;
+mod rank_value_finder;
 mod utils;
 
 use std::{marker::PhantomData};
@@ -282,6 +283,7 @@ use super::utils::{
     ordered_double::OrderedDouble,
     sorting_networks,
 };
+use rank_value_finder::*;
 
 const SORTING_NETWORK_SIZE: usize = sorting_networks::SORTING_NETWORK_SIZE_16;
 const K_ARY: usize = 8;
@@ -432,28 +434,6 @@ impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
     }
 }
 
-struct QuantileWindowSelectionHelper<'a> {
-    block_index: usize,
-    tracker: usize,
-    tracker_low: usize,
-    tracker_high: usize,
-    data_slice: &'a [OrderedDouble],
-    tracker_value: OrderedDouble,
-    invalid: bool,
-}
-
-#[derive(Clone, Copy)]
-struct QuantileWindowSelectionCandidate {
-    block_index: usize,
-    block_tracker: usize,
-    block_value: OrderedDouble,
-}
-
-struct QuantileWindowSelectionResult {
-    selection_candidate: QuantileWindowSelectionCandidate,
-    duplicates_to_skip: usize,
-}
-
 struct QuantileWindowUpdateHelper {
     block_tracker: usize,
     block_length: usize,
@@ -574,7 +554,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         let floor_rank = searched_rank.floor() as usize;
 
         let selection_result = self.find_value_by_rank(floor_rank);
-        let global_floor_candidate = selection_result.selection_candidate;
+        let global_floor_candidate = selection_result.get_selection_cadidate();
         self.initialize_block_tracker(global_floor_candidate);
 
         self.pred_tree.initialize_tree(&self.block_data);
@@ -584,11 +564,11 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         self.searched_rank = searched_rank;
         self.global_floor_rank = floor_rank;
         self.actual_floor_rank = floor_rank;
-        self.actual_floor_value = global_floor_candidate.block_value;
-        self.actual_floor_block_index = global_floor_candidate.block_index;
+        self.actual_floor_value = global_floor_candidate.get_block_value();
+        self.actual_floor_block_index = global_floor_candidate.get_block_index();
         self.interpolation = !((searched_rank % 1.0) == 0.0);
 
-        let duplicates_to_skip = selection_result.duplicates_to_skip;
+        let duplicates_to_skip = selection_result.get_duplicates_to_skip();
         self.skip_duplicates(duplicates_to_skip);
 
         // Setting floor block
@@ -610,118 +590,14 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         searched_rank: usize
     ) -> QuantileWindowSelectionResult {
         let blocks_len = self.block_data.len();
-
-        let mut selection_helpers: Vec<QuantileWindowSelectionHelper> = Vec::with_capacity(blocks_len);
+        let mut selection_helpers = Vec::with_capacity(blocks_len);
         for (index, block) in self.block_data.iter().enumerate() {
-            selection_helpers.push(QuantileWindowSelectionHelper {
-                block_index: index,
-                tracker: 0,
-                tracker_high: block.length,
-                tracker_low: 0,
-                data_slice: &block.data,
-                tracker_value: OrderedDouble::from_f64(0.0),
-                invalid: false,
-            });
+            selection_helpers.push(
+                QuantileWindowSelectionHelper::new(index, block.length, &block.data)
+            );
         }
 
-        let mut pivot_candidates: Vec<QuantileWindowSelectionCandidate> = vec![
-            QuantileWindowSelectionCandidate {
-                block_index: 0,
-                block_tracker: 0,
-                block_value: OrderedDouble::from_f64(0.0)
-            }; blocks_len];
-
-        loop {
-            let mut active_blocks = 0;
-            for selection_helper in &mut selection_helpers {
-                if selection_helper.invalid {
-                    continue;
-                }
-
-                let tracker_calculation =
-                    |low, high| (low + (high - 1)) / 2;
-                let tracker_index =
-                    tracker_calculation(selection_helper.tracker_low, selection_helper.tracker_high);
-                selection_helper.tracker = tracker_index;
-
-                let tracker_value = selection_helper.data_slice[tracker_index];
-                selection_helper.tracker_value = tracker_value;
-
-                pivot_candidates[active_blocks].block_index = selection_helper.block_index;
-                pivot_candidates[active_blocks].block_tracker = tracker_index;
-                pivot_candidates[active_blocks].block_value = tracker_value;
-                active_blocks += 1;
-            }
-
-            let candidates_slice = &mut pivot_candidates[0..active_blocks];
-            let pivot_element =
-                candidates_slice.select_nth_unstable_by(active_blocks / 2,
-                |a, b| a.block_value.cmp(&b.block_value)).1;
-
-            let mut global_lower_bound = 0;
-            let mut global_upper_bound = 0;
-            for selection_helper in &selection_helpers {
-                if selection_helper.invalid {
-                    continue;
-                }
-
-                let target_slice =
-                    &selection_helper.data_slice[selection_helper.tracker_low..selection_helper.tracker_high];
-
-                let pivot_lower_bound = target_slice
-                    .partition_point(|&x| x < pivot_element.block_value);
-                global_lower_bound += pivot_lower_bound;
-
-                let pivot_upper_bound = target_slice
-                    .partition_point(|&x| x <= pivot_element.block_value);
-                global_upper_bound += pivot_upper_bound;
-            }
-
-            for selection_helper in &selection_helpers {
-                global_lower_bound += selection_helper.tracker_low;
-                global_upper_bound += selection_helper.tracker_low;
-            }
-
-            if searched_rank >= global_lower_bound && searched_rank < global_upper_bound {
-                let duplicates_to_skip = searched_rank - global_lower_bound;
-                return QuantileWindowSelectionResult {
-                    selection_candidate: *pivot_element,
-                    duplicates_to_skip
-                };
-            } else if global_lower_bound < searched_rank {
-                for selection_helper in &mut selection_helpers {
-                    if selection_helper.invalid {
-                        continue;
-                    }
-
-                    let tracker_value = selection_helper.tracker_value;
-                    if tracker_value <= pivot_element.block_value {
-                        let new_lower = selection_helper.tracker + 1;
-                        selection_helper.tracker_low = new_lower;
-
-                        if new_lower == selection_helper.tracker_high {
-                            selection_helper.invalid = true;
-                        }
-                    }
-                }
-            } else if global_lower_bound > searched_rank {
-                for selection_helper in &mut selection_helpers {
-                    if selection_helper.invalid {
-                        continue;
-                    }
-
-                    let tracker_value = selection_helper.tracker_value;
-                    if tracker_value >= pivot_element.block_value {
-                        let new_high = selection_helper.tracker;
-                        selection_helper.tracker_high = new_high;
-
-                        if new_high == selection_helper.tracker_low {
-                            selection_helper.invalid = true;
-                        }
-                    }
-                }
-            }
-        }
+        rank_value_finder::find_rank_value(searched_rank, selection_helpers)
     }
 
     fn initialize_block_tracker(
@@ -734,8 +610,8 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
             // will point to the first appearance of the duplicate e.g. the first index.
             // The result is comparable with [`block.data.partition_point`], but while testing this manual
             // shift increased the overall performance.
-            if index == floor_value_canidate.block_index {
-                let mut block_tracker = floor_value_canidate.block_tracker;
+            if index == floor_value_canidate.get_block_index() {
+                let mut block_tracker = floor_value_canidate.get_block_tracker();
                 let tracker_value = block.data[block_tracker];
 
                 while block_tracker > 0 && tracker_value == block.data[block_tracker - 1] {
@@ -748,7 +624,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
             }
 
             let lower_bound_of_floor_value = block.data
-                .partition_point(|&x| x < floor_value_canidate.block_value);
+                .partition_point(|&x| x < floor_value_canidate.get_block_value());
             if lower_bound_of_floor_value == block.length {
                 block.ran_out_right = true;
             }
