@@ -554,7 +554,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         let floor_rank = searched_rank.floor() as usize;
 
         let selection_result = self.find_value_by_rank(floor_rank);
-        let global_floor_candidate = selection_result.get_selection_cadidate();
+        let global_floor_candidate = selection_result.get_selection_candidate();
         self.initialize_block_tracker(global_floor_candidate);
 
         self.pred_tree.initialize_tree(&self.block_data);
@@ -583,21 +583,6 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         self.block_data
             .iter_mut()
             .for_each(|block| block.sort());
-    }
-
-    fn find_value_by_rank(
-        &self,
-        searched_rank: usize
-    ) -> QuantileWindowSelectionResult {
-        let blocks_len = self.block_data.len();
-        let mut selection_helpers = Vec::with_capacity(blocks_len);
-        for (index, block) in self.block_data.iter().enumerate() {
-            selection_helpers.push(
-                QuantileWindowSelectionHelper::new(index, block.length, &block.data)
-            );
-        }
-
-        rank_value_finder::find_rank_value(searched_rank, selection_helpers)
     }
 
     fn initialize_block_tracker(
@@ -1621,6 +1606,7 @@ where
 }
 
 // Main function
+#[inline(never)]
 pub fn rolling_window<const BLOCK_SIZE: usize>(
     input_array: &[f64],
     window_size: usize,
