@@ -329,6 +329,21 @@ struct QuantileWindowBlock<const BLOCK_SIZE: usize> {
     ran_out_right: bool,
 }
 
+impl<const BLOCK_SIZE: usize> Default for QuantileWindowBlock<BLOCK_SIZE> {
+
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            data: [PLACE_HOLDER_VALUE; BLOCK_SIZE],
+            length: 0,
+            update_index: 0,
+            tracker: 0,
+            actual_floor_block: false,
+            ran_out_right: false
+        }
+    }
+}
+
 impl<const BLOCK_SIZE: usize> QuantileWindowBlock<BLOCK_SIZE> {
 
     fn sort(
@@ -494,14 +509,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
             actual_floor_block_index: 0,
             interpolation: false,
             actual_block: 0,
-            block_data: vec![QuantileWindowBlock {
-                data: [PLACE_HOLDER_VALUE; BLOCK_SIZE],
-                length: 0,
-                update_index: 0,
-                tracker: 0,
-                actual_floor_block: false,
-                ran_out_right: false
-            }; needed_blocks],
+            block_data: vec![QuantileWindowBlock::default(); needed_blocks],
             queue_data: vec![OrderedDouble::default(); needed_queue_size],
             pred_tree: QuantileWindowTree::<QuantileWindowPredeccessorTree>::new(needed_blocks),
             succ_tree: QuantileWindowTree::<QuantileWindowSuccessorTree>::new(needed_blocks),
