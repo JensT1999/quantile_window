@@ -1,6 +1,6 @@
 use std::ptr;
 use crate::window::{
-    utils::ordered_double::OrderedDouble
+    quantile_window::INVALID_VALUE, utils::ordered_double::OrderedDouble
 };
 
 #[inline(always)]
@@ -98,7 +98,7 @@ pub fn map_to_corresponding_value(
     value: f64
 ) -> OrderedDouble {
     if value.is_nan() {
-        OrderedDouble::MAX
+        INVALID_VALUE
     } else {
         OrderedDouble::from_f64(value)
     }
@@ -108,7 +108,7 @@ pub fn map_to_corresponding_value(
 pub fn is_invalid_value(
     tested_value: OrderedDouble
 ) -> bool {
-    tested_value == OrderedDouble::MAX
+    tested_value == INVALID_VALUE
 }
 
 #[cfg(test)]

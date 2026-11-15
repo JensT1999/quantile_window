@@ -288,7 +288,11 @@ use rank_value_finder::*;
 const SORTING_NETWORK_SIZE: usize = sorting_networks::SORTING_NETWORK_SIZE_16;
 const K_ARY: usize = 8;
 
-const PLACE_HOLDER_VALUE: OrderedDouble = OrderedDouble::MAX;
+const INVALID_VALUE: OrderedDouble = OrderedDouble::MAX;
+const PLACE_HOLDER_VALUE: OrderedDouble = INVALID_VALUE;
+
+// Tree Dummy Values, `SUCC_DUMMY_VALUE` equals `INVALID_VALUE` but `OrderedDouble::MAX` shows more explicitly that
+// `SUCC_DUMMY_VALUE` should always lose the comparisons inside a minimum tracking tournament tree.
 const PRED_DUMMY_VALUE: OrderedDouble = OrderedDouble::MIN;
 const SUCC_DUMMY_VALUE: OrderedDouble = OrderedDouble::MAX;
 
@@ -505,7 +509,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
             searched_rank: 0.0,
             global_floor_rank: 0,
             actual_floor_rank: 0,
-            actual_floor_value: OrderedDouble::default(),
+            actual_floor_value: INVALID_VALUE,
             actual_floor_block_index: 0,
             interpolation: false,
             actual_block: 0,
@@ -539,16 +543,13 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         }
     }
 
-    fn finish_fill_get_first_result(
+    fn finish_fill(
         &mut self
-    ) -> f64 {
+    ) {
         self.actual_block = 0;
-        if self.empty() {
-            return f64::NAN;
+        if !self.empty() {
+            self.prepare();
         }
-
-        self.prepare();
-        self.result_quantile()
     }
 
     // Prepare
@@ -821,10 +822,12 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 
         if update_result.window_no_valid_succ {
             if self.pred_tree.got_invalid_root() {
+                // For correctness the actual_tracker_value should always be set, even if it equals `f64::NaN`.
+                // This is because the function that returns the result quantile checks no longer for an empty
+                // window, so the window carries its empty state with an actual_floor_value of `f64::NAN`.
+
                 let actual_tracker_value = actual_block.data[0];
-                if !utils::is_invalid_value(actual_tracker_value) {
-                    self.actual_floor_value = actual_tracker_value;
-                }
+                self.actual_floor_value = actual_tracker_value;
             } else {
                 self.shift_floor_to_predeccessor();
             }
@@ -1071,10 +1074,16 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
     fn result_quantile(
         &self
     ) -> f64 {
-        let floor_value: f64 = self.actual_floor_value.to_f64();
+        let floor_value = self.actual_floor_value.to_f64();
         if !self.interpolation {
+            // If the window is empty and `self.actual_floor_value` equals NaN it always should end up
+            // in this case.
             floor_value
         } else {
+            // This case should never be entered when the window is empty!
+            debug_assert!(!self.empty());
+            debug_assert!(!utils::is_invalid_value(self.actual_floor_value));
+
             let successor_value = self.succ_tree.get_root().value;
             let successor_value = successor_value.to_f64();
 
@@ -1086,11 +1095,11 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
         }
     }
 
-    fn adjust_and_result_quantile(
+    fn adjust_window_state(
         &mut self
-    ) -> f64 {
+    ) {
         if self.empty() {
-            return f64::NAN;
+            return;
         }
 
         let current_size = self.valid_size();
@@ -1102,7 +1111,6 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 
         self.global_right_shift();
         self.global_left_shift();
-        self.result_quantile()
     }
 
     fn global_right_shift(
@@ -1259,7 +1267,7 @@ impl<const BLOCK_SIZE: usize> QuantileWindow<BLOCK_SIZE> {
 // Tree
 
 mod quantilewindow_tree_utils {
-    use crate::window::quantile_window::K_ARY;
+    use super::K_ARY;
 
     #[inline(always)]
     pub fn tree_calculate_metadata(
@@ -1639,8 +1647,9 @@ pub fn rolling_window<const BLOCK_SIZE: usize>(
                 window.add(input_value);
                 window
             });
+    window.finish_fill();
 
-    let first_result = window.finish_fill_get_first_result();
+    let first_result = window.result_quantile();
     result_vec.push(first_result);
 
     let input_slice = &input_array[window_size..];
@@ -1649,8 +1658,9 @@ pub fn rolling_window<const BLOCK_SIZE: usize>(
         .for_each(|value| {
             let input_value = utils::map_to_corresponding_value(*value);
             window.update_window(input_value);
+            window.adjust_window_state();
 
-            let result = window.adjust_and_result_quantile();
+            let result = window.result_quantile();
             result_vec.push(result);
         });
 
@@ -1710,7 +1720,7 @@ mod tests {
 
     #[test]
     fn test_quantilewindow_new() {
-        let expected_actual_floor_value = OrderedDouble::from_f64(0.0);
+        let expected_actual_floor_value = INVALID_VALUE;
         let expected_window_blocks = utils::calculate_needed_blocks::<BLOCK_SIZE>(
             QUANTILEWINDOW_TEST_SIZE
         );
